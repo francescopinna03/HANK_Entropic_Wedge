@@ -4,6 +4,7 @@
 \usepackage{amsmath,amssymb,amsthm}
 \usepackage[margin=2.6cm]{geometry}
 \usepackage{booktabs}
+\usepackage{float}
 \usepackage{graphicx}
 \graphicspath{{figs/}{../figs/}}
 \usepackage[colorlinks=true,linkcolor=black,citecolor=black,urlcolor=black]{hyperref}
@@ -153,7 +154,7 @@ Il terzo limite riguarda la convenzione di scala. Il peso \eqref{eq:qbar} adotta
 \section{Struttura del codice e riproduzione}\label{sec:codice}
 Il repository contiene sette file Python, elencati nella Tabella~\ref{tab:codice} con il loro ruolo economico. L'intero esercizio si riproduce eseguendo in sequenza i quattro script di analisi con il comando \texttt{make}, in meno di un minuto su una macchina ordinaria e con la sola dipendenza da NumPy, SciPy e Matplotlib.
 
-\begin{table}[t]
+\begin{table}[H]
 \centering\small
 \caption{File del repository e loro funzione.}
 \label{tab:codice}
