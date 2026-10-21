@@ -57,9 +57,9 @@ U_PRIME_INV = lambda w: w ** (-1.0 / GAMMA)
 # tilted transition matrices, state-dependent in end-of-period assets
 def tilted_Pi(delta_on_grid):
     Pi = np.empty((NA, NZ, NZ))
-    scale = 1.0 + delta_on_grid                      # (NA,)
+    scale = 1.0 + np.asarray(delta_on_grid)                      # (NA,)
     off = PI0 * (1.0 - np.eye(NZ))                   # off-diagonal part
-    Pi[:] = off[None, :, :] * scale[:, None, None]
+    Pi[:] = off[None, :, :] * (scale[:, :, None] if scale.ndim == 2 else scale[:, None, None])
     rowsum_off = Pi.sum(axis=2)                      # (NA,NZ)
     for z in range(NZ):
         Pi[:, z, z] = 1.0 - rowsum_off[:, z]
@@ -155,9 +155,15 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
     K = masks.shape[0]
     r_path = R_SS + np.asarray(dr_path)
     beta_path = BETA * (1.0 + (np.zeros(T) if dbeta_path is None else np.asarray(dbeta_path)))
-    delta_grid = np.zeros((T, NA))
-    for k in range(K):
-        delta_grid[:, masks[k]] += np.asarray(delta_paths)[k][:, None]
+    dp = np.asarray(delta_paths)
+    if dp.ndim == 2:
+        delta_grid = np.zeros((T, NA))
+        for k in range(K):
+            delta_grid[:, masks[k]] += dp[k][:, None]
+    else:
+        delta_grid = np.zeros((T, NA, NZ))
+        for k in range(K):
+            delta_grid[:, masks[k], :] += dp[k].T[:, None, :]
     Pis = [tilted_Pi(delta_grid[t]) for t in range(T)]
     c_next = ss['c']
     cs, gs = [None] * T, [None] * T

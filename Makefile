@@ -1,6 +1,6 @@
 PY ?= python3
 
-all: results.json results_micro.json results_economics.json figs/F4_risoluzione.pdf results_ge.json
+all: results.json results_micro.json results_economics.json figs/F4_risoluzione.pdf results_ge.json results_channels.json
 
 results.json: model.py entropic.py run_all.py
 	$(PY) run_all.py
@@ -10,6 +10,9 @@ results_micro.json: results.json run_micro.py
 
 results_ge.json: model.py entropic.py closure.py run_ge.py
 	$(PY) run_ge.py
+
+results_channels.json: model.py entropic.py closure.py channels.py run_channels.py
+	$(PY) run_channels.py
 
 results_economics.json: model.py economics.py plotstyle.py
 	$(PY) economics.py
