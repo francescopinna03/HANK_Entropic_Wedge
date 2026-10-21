@@ -67,10 +67,10 @@ def tilted_Pi(delta_on_grid):
 
 
 # EGM backward step with time-varying r and Pi(a')
-def egm_step(c_next, Pi_t, r_t, r_next):
+def egm_step(c_next, Pi_t, r_t, r_next, beta=BETA):
     mu_next = U_PRIME(c_next)  # (NA,NZ)
     # W(a',z) = beta (1+r_{t+1}) sum_{z'} Pi_t[a',z,z'] u'(c_{t+1}(a',z'))
-    W = BETA * (1.0 + r_next) * np.einsum('azx,ax->az', Pi_t, mu_next)
+    W = beta * (1.0 + r_next) * np.einsum('azx,ax->az', Pi_t, mu_next)
     c_endog = U_PRIME_INV(W)    # (NA,NZ) at a'
     coh_endog = c_endog + AGRID[:, None]   # cash on hand needed
     a_endog = (coh_endog - Y[None, :]) / (1.0 + r_t)
@@ -151,9 +151,10 @@ def qbar(mu_end, masks):
 
 
 # transition-path solver (nonlinear, anticipated paths)
-def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
+def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_path=None, return_assets=False): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
     K = masks.shape[0]
     r_path = R_SS + np.asarray(dr_path)
+    beta_path = BETA * (1.0 + (np.zeros(T) if dbeta_path is None else np.asarray(dbeta_path)))
     delta_grid = np.zeros((T, NA))
     for k in range(K):
         delta_grid[:, masks[k]] += np.asarray(delta_paths)[k][:, None]
@@ -162,9 +163,10 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12): #dr_pat
     cs, gs = [None] * T, [None] * T
     for t in range(T - 1, -1, -1):
         r_next = r_path[t + 1] if t + 1 < T else R_SS
-        cs[t], gs[t] = egm_step(c_next, Pis[t], r_path[t], r_next)
+        cs[t], gs[t] = egm_step(c_next, Pis[t], r_path[t], r_next, beta_path[t])
         c_next = cs[t]
     mu = ss['mu'].copy()
+    A_path = np.empty(T)
     dC = np.empty(H)
     dCb = np.empty(Hb) if extra_mask is not None else None
     if extra_mask is not None:
@@ -175,9 +177,11 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12): #dr_pat
         if extra_mask is not None and t < Hb:
             dCb[t] = 100.0 * (np.sum(mu[extra_mask] * cs[t][extra_mask])
                               / Cb_ss - 1.0)
+        A_path[t] = np.sum(mu * gs[t])
         if t < T - 1:
             mu, _ = forward_step(mu, gs[t], Pis[t])
-    return dC if extra_mask is None else np.concatenate([dC, dCb])
+    out = dC if extra_mask is None else np.concatenate([dC, dCb])
+    return (out, A_path) if return_assets else out
 
 
 # sequence-space Jacobian by direct anticipated perturbations
