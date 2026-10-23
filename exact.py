@@ -169,14 +169,18 @@ def quadratic_restricted(delta_y, J, w_blocks, blocks, ridge=1e-12):
     return float(0.5 * u @ (d * u)), u
 
 
-def exact_restricted(delta_y, masks, st, blocks, u0=None, maxiter=30, tol=1e-9, eps=1e-5):
+def forward_reopt(delta_state, masks, ss, extra_mask, Hb=12):
+    g, kl = solve_path(ss, np.zeros(T), delta_state, masks, extra_mask=extra_mask, Hb=Hb, return_kl=True)
+    return g, kl
+
+
+def exact_restricted(delta_y, masks, st, blocks, u0=None, maxiter=30, tol=1e-9, eps=1e-5, forward=None):
     K = masks.shape[0]
     nb = len(blocks)
+    fwd = (lambda d: forward_with_delta(d, masks, st)) if forward is None else forward
     w = second_order_weights(masks, st)
     D = np.concatenate([np.full(T, w[k, z]) for (k, z) in blocks])
     active = np.ones(delta_y.size, dtype=bool)
-    active[0] = False
-    active[H] = False
     def unpack(x):
         d = np.zeros((K, NZ, T))
         for i, (k, z) in enumerate(blocks):
@@ -184,16 +188,20 @@ def exact_restricted(delta_y, masks, st, blocks, u0=None, maxiter=30, tol=1e-9, 
         return d
     x = np.zeros(nb * T) if u0 is None else u0.copy()
     hist = []
+    lam = np.zeros(delta_y.size)
     for it in range(maxiter):
-        g0, kl0 = forward_with_delta(unpack(x), masks, st)
-        r = (delta_y - g0)[active]
-        J = np.empty((active.sum(), nb * T))
+        g0, kl0 = fwd(unpack(x))
+        Jfull = np.empty((delta_y.size, nb * T))
         gk = np.empty(nb * T)
         for j in range(nb * T):
             xp = x.copy(); xp[j] += eps
-            g, kl = forward_with_delta(unpack(xp), masks, st)
-            J[:, j] = (g - g0)[active] / eps
+            g, kl = fwd(unpack(xp))
+            Jfull[:, j] = (g - g0) / eps
             gk[j] = (kl - kl0) / eps
+        if it == 0:
+            active = np.linalg.norm(Jfull, axis=1) > 1e-10
+        J = Jfull[active]
+        r = (delta_y - g0)[active]
         JD = J / D[None, :]
         lam = np.linalg.solve(JD @ J.T, r + JD @ gk)
         step = (J.T @ lam - gk) / D
@@ -201,8 +209,10 @@ def exact_restricted(delta_y, masks, st, blocks, u0=None, maxiter=30, tol=1e-9, 
         hist.append((kl0, float(np.abs(r).max()), float(np.abs(step).max())))
         if np.abs(r).max() < tol and np.abs(step).max() < 1e-7:
             break
-    g, kl = forward_with_delta(unpack(x), masks, st)
-    return dict(W=kl, delta=unpack(x), u=x, feasibility=float(np.max(np.abs((g - delta_y)[active]))), nit=it + 1, hist=hist)
+    g, kl = fwd(unpack(x))
+    prices = np.zeros(delta_y.size)
+    prices[active] = lam
+    return dict(W=kl, delta=unpack(x), u=x, feasibility=float(np.max(np.abs((g - delta_y)[active]))), nit=it + 1, hist=hist, prices=prices)
 
 
 def kl_by_block(delta_state, masks, st):

@@ -151,7 +151,7 @@ def qbar(mu_end, masks):
 
 
 # transition-path solver (nonlinear, anticipated paths)
-def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_path=None, return_assets=False): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
+def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_path=None, return_assets=False, return_kl=False): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
     K = masks.shape[0]
     r_path = R_SS + np.asarray(dr_path)
     beta_path = BETA * (1.0 + (np.zeros(T) if dbeta_path is None else np.asarray(dbeta_path)))
@@ -173,6 +173,7 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
         c_next = cs[t]
     mu = ss['mu'].copy()
     A_path = np.empty(T)
+    kl = 0.0
     dC = np.empty(H)
     dCb = np.empty(Hb) if extra_mask is not None else None
     if extra_mask is not None:
@@ -184,9 +185,15 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
             dCb[t] = 100.0 * (np.sum(mu[extra_mask] * cs[t][extra_mask])
                               / Cb_ss - 1.0)
         A_path[t] = np.sum(mu * gs[t])
-        if t < T - 1:
-            mu, _ = forward_step(mu, gs[t], Pis[t])
+        if t < T - 1 or return_kl:
+            mu_next, mu_end = forward_step(mu, gs[t], Pis[t])
+            if return_kl:
+                kl += float(np.sum(mu_end[:, :, None] * Pis[t] * np.log(Pis[t] / PI0[None, :, :])))
+            if t < T - 1:
+                mu = mu_next
     out = dC if extra_mask is None else np.concatenate([dC, dCb])
+    if return_kl:
+        return (out, A_path, kl) if return_assets else (out, kl)
     return (out, A_path) if return_assets else out
 
 
