@@ -155,11 +155,12 @@ def hank_jacobian(ss, Jy, JC, with_micro, kappa_y=KAPPA_Y, phi_pi=PHI_PI):
     dY = dict(e=HUinv @ G, d=HUinv @ JC['d'], b=HUinv @ JC['b'])
     dr = dict(e=R @ dY['e'] + np.eye(T), d=R @ dY['d'], b=R @ dY['b'])
     dx = {k: dY[k] - B * dr[k] for k in dY}
+    direct = dict(e=0.0, d=Jy['d'][H:])
     rows = {}
     for k in ['e', 'd']:
         rows[k] = 100.0 * dY[k][:H] / Y_ss
         if with_micro:
-            rows[k] = np.vstack([rows[k], Jy['r'][H:] @ dr[k] + Jy['x'][H:] @ dx[k]])
+            rows[k] = np.vstack([rows[k], direct[k] + Jy['r'][H:] @ dr[k] + Jy['x'][H:] @ dx[k]])
     return np.hstack([rows['e'], rows['d']]), op, dict(dY=dY, dr=dr, dx=dx)
 
 
