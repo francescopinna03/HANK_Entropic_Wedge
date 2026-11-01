@@ -2,6 +2,10 @@ import numpy as np
 from model import *
 
 
+KAPPA_Y = 0.05
+PHI_PI = 1.5
+
+
 def ge_outputs(ss, dr, dbeta, delta, masks, extra_mask=None, Hb=12):
     return solve_path(ss, dr, delta, masks, extra_mask=extra_mask, Hb=Hb,
                       dbeta_path=dbeta, return_assets=True)
@@ -86,3 +90,122 @@ def monitors(JA_r, Jt):
 
 def cosine(u, v):
     return float(u @ v / np.sqrt((u @ u) * (v @ v)))
+
+
+def hank_outputs(ss, dr, dx, dbeta, delta, masks, extra_mask=None, Hb=12):
+    return solve_path(ss, dr, delta, masks, extra_mask=extra_mask, Hb=Hb,
+                      dbeta_path=dbeta, dx_path=dx, return_consumption=True)
+
+
+def consumption_jacobians(ss, masks, extra_mask=None, Hb=12, eps_r=1e-5, eps_b=1e-5, eps_d=1e-4, eps_x=1e-5):
+    K = masks.shape[0]
+    zr = np.zeros(T)
+    zd = np.zeros((K, T))
+    y0, A0, C0 = hank_outputs(ss, zr, zr, zr, zd, masks, extra_mask, Hb)
+    Hm = y0.size
+    Jy = dict(r=np.empty((Hm, T)), b=np.empty((Hm, T)), d=np.empty((Hm, K * T)), x=np.empty((Hm, T)))
+    JC = dict(r=np.empty((T, T)), b=np.empty((T, T)), d=np.empty((T, K * T)), x=np.empty((T, T)))
+    for s in range(T):
+        dr = np.zeros(T); dr[s] = eps_r
+        y, A, C = hank_outputs(ss, dr, zr, zr, zd, masks, extra_mask, Hb)
+        Jy['r'][:, s] = (y - y0) / eps_r
+        JC['r'][:, s] = (C - C0) / eps_r
+        dx = np.zeros(T); dx[s] = eps_x
+        y, A, C = hank_outputs(ss, zr, dx, zr, zd, masks, extra_mask, Hb)
+        Jy['x'][:, s] = (y - y0) / eps_x
+        JC['x'][:, s] = (C - C0) / eps_x
+        db = np.zeros(T); db[s] = eps_b
+        y, A, C = hank_outputs(ss, zr, zr, db, zd, masks, extra_mask, Hb)
+        Jy['b'][:, s] = (y - y0) / eps_b
+        JC['b'][:, s] = (C - C0) / eps_b
+    for k in range(K):
+        for s in range(T):
+            dd = np.zeros((K, T)); dd[k, s] = eps_d
+            y, A, C = hank_outputs(ss, zr, zr, zr, dd, masks, extra_mask, Hb)
+            Jy['d'][:, k * T + s] = (y - y0) / eps_d
+            JC['d'][:, k * T + s] = (C - C0) / eps_d
+    return Jy, JC, y0, C0
+
+
+def aggregate_consumption(Jy, JC, Kc, K8=8):
+    g = K8 // Kc
+    Jyd = np.empty((Jy['d'].shape[0], Kc * T))
+    JCd = np.empty((T, Kc * T))
+    for k in range(Kc):
+        Jyd[:, k*T:(k+1)*T] = sum(Jy['d'][:, j*T:(j+1)*T] for j in range(g*k, g*(k+1)))
+        JCd[:, k*T:(k+1)*T] = sum(JC['d'][:, j*T:(j+1)*T] for j in range(g*k, g*(k+1)))
+    return dict(r=Jy['r'], b=Jy['b'], d=Jyd, x=Jy['x']), dict(r=JC['r'], b=JC['b'], d=JCd, x=JC['x'])
+
+
+def hank_operators(ss, JC, kappa_y=KAPPA_Y, phi_pi=PHI_PI):
+    F = np.eye(T, k=1)
+    Y_ss = ss['C']
+    B = ss['A']
+    P = np.linalg.solve(np.eye(T) - BETA * F, kappa_y * np.eye(T)) / Y_ss
+    R = (phi_pi * np.eye(T) - F) @ P
+    G = JC['r'] - B * JC['x']
+    HU = np.eye(T) - JC['x'] - G @ R
+    return dict(P=P, R=R, G=G, HU=HU, F=F, Y_ss=Y_ss, B=B, kappa_y=kappa_y, phi_pi=phi_pi)
+
+
+def hank_jacobian(ss, Jy, JC, with_micro, kappa_y=KAPPA_Y, phi_pi=PHI_PI):
+    op = hank_operators(ss, JC, kappa_y, phi_pi)
+    Y_ss, B, R, G = op['Y_ss'], op['B'], op['R'], op['G']
+    HUinv = np.linalg.inv(op['HU'])
+    dY = dict(e=HUinv @ G, d=HUinv @ JC['d'], b=HUinv @ JC['b'])
+    dr = dict(e=R @ dY['e'] + np.eye(T), d=R @ dY['d'], b=R @ dY['b'])
+    dx = {k: dY[k] - B * dr[k] for k in dY}
+    rows = {}
+    for k in ['e', 'd']:
+        rows[k] = 100.0 * dY[k][:H] / Y_ss
+        if with_micro:
+            rows[k] = np.vstack([rows[k], Jy['r'][H:] @ dr[k] + Jy['x'][H:] @ dx[k]])
+    return np.hstack([rows['e'], rows['d']]), op, dict(dY=dY, dr=dr, dx=dx)
+
+
+def hank_transition(ss, eps, delta, masks, JC, extra_mask=None, Hb=12, dbeta=None, kappa_y=KAPPA_Y, phi_pi=PHI_PI, tol=1e-10, maxit=80):
+    op = hank_operators(ss, JC, kappa_y, phi_pi)
+    Y_ss, B, F, G = op['Y_ss'], op['B'], op['F'], op['G']
+    db = np.zeros(T) if dbeta is None else dbeta
+
+    def paths(Y, pi):
+        r = R_SS + phi_pi * pi + eps - F @ pi
+        X = Y - r * B
+        return r, X
+
+    def residual(Y, pi):
+        r, X = paths(Y, pi)
+        y, A, C = hank_outputs(ss, r - R_SS, X - 1.0, db, delta, masks, extra_mask, Hb)
+        gY = Y - C
+        gpi = pi - kappa_y * np.log(Y / Y_ss) - BETA * (F @ pi)
+        return np.concatenate([gY, gpi]), y, r, C
+
+    Y = np.full(T, Y_ss)
+    pi = np.zeros(T)
+    f, y, r, C = residual(Y, pi)
+    dr_dpi = phi_pi * np.eye(T) - F
+    JY = np.block([[np.eye(T) - JC['x'], -G @ dr_dpi],
+                   [-kappa_y / Y_ss * np.eye(T), np.eye(T) - BETA * F]])
+    Binv = np.linalg.inv(JY)
+    z = np.concatenate([Y, pi])
+    it = 0
+    while np.max(np.abs(f)) > tol and it < maxit:
+        step = -Binv @ f
+        z = z + step
+        Y, pi = z[:T], z[T:]
+        f_new, y, r, C = residual(Y, pi)
+        df = f_new - f
+        Binv = Binv + np.outer(step - Binv @ df, step @ Binv) / (step @ Binv @ df)
+        f = f_new
+        it += 1
+    m = y[:H]
+    if extra_mask is not None:
+        m = np.concatenate([m, y[H:]])
+    return m, r - R_SS, pi, Y, it, float(np.max(np.abs(f)))
+
+
+def determinacy_monitor(op):
+    s = np.linalg.svd(op['HU'], compute_uv=False)
+    return dict(phi_pi=float(op['phi_pi']), kappa_y=float(op['kappa_y']),
+                taylor_principle=bool(op['phi_pi'] > 1.0),
+                sigma_min_HU=float(s[-1]), sigma_max_HU=float(s[0]), cond_HU=float(s[0] / s[-1]))
