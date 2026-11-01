@@ -33,18 +33,55 @@ of the deformation depends on the state in which the transition actually happens
 """
 
 import numpy as np
+import os
+
+
+def rouwenhorst(n, rho, sigma):
+    p = (1.0 + rho) / 2.0
+    Pi = np.array([[p, 1.0 - p], [1.0 - p, p]])
+    for m in range(3, n + 1):
+        Z = np.zeros((m, m))
+        Z[:-1, :-1] += p * Pi
+        Z[:-1, 1:] += (1.0 - p) * Pi
+        Z[1:, :-1] += (1.0 - p) * Pi
+        Z[1:, 1:] += p * Pi
+        Z[1:-1] /= 2.0
+        Pi = Z
+    psi = sigma * np.sqrt(n - 1)
+    z = np.linspace(-psi, psi, n)
+    w = np.ones(n) / n
+    for _ in range(10000):
+        w_new = w @ Pi
+        if np.max(np.abs(w_new - w)) < 1e-15:
+            break
+        w = w_new
+    y = np.exp(z) / (w @ np.exp(z))
+    return y, Pi
+
+
+CALIBRATIONS = dict(
+    lab=dict(beta=0.97, r=0.01, a_max=60.0, income=dict(kind='two_state', y=[0.70, 1.30], p_switch=0.075)),
+    liquid=dict(beta=None, beta_solved=0.954320, r=0.01, a_max=40.0, wealth_target=1.04, income=dict(kind='rouwenhorst', n=7, rho=0.966, sigma=0.5)),
+    total=dict(beta=None, beta_solved=0.975019, r=0.01, a_max=200.0, wealth_target=5.6, income=dict(kind='rouwenhorst', n=7, rho=0.966, sigma=0.5)),
+)
+CALIBRATION = os.environ.get('HANK_CALIBRATION', 'lab')
+_cal = CALIBRATIONS[CALIBRATION]
 
 # calibration
-BETA = 0.97          # quarterly discount factor
+BETA = _cal['beta']  # quarterly discount factor
 GAMMA = 2.0          # CRRA
-R_SS = 0.01          # quarterly real rate (4% annual)
-Y = np.array([0.70, 1.30])          # income states (mean 1)
-PI0 = np.array([[0.925, 0.075],
-                [0.075, 0.925]])    # baseline quarterly transition matrix
-NZ = 2
+R_SS = _cal['r']     # quarterly real rate (4% annual)
+if _cal['income']['kind'] == 'two_state':
+    Y = np.array(_cal['income']['y'])          # income states (mean 1)
+    _p = _cal['income']['p_switch']
+    PI0 = np.array([[1.0 - _p, _p],
+                    [_p, 1.0 - _p]])    # baseline quarterly transition matrix
+else:
+    Y, PI0 = rouwenhorst(_cal['income']['n'], _cal['income']['rho'], _cal['income']['sigma'])
+NZ = Y.size
 
 NA = 120
-A_MIN, A_MAX = 0.0, 60.0
+A_MIN, A_MAX = 0.0, _cal['a_max']
 AGRID = A_MIN + (A_MAX - A_MIN) * np.linspace(0.0, 1.0, NA) ** 2.5
 
 T = 40     # truncation horizon for input paths
@@ -67,19 +104,21 @@ def tilted_Pi(delta_on_grid):
 
 
 # EGM backward step with time-varying r and Pi(a')
-def egm_step(c_next, Pi_t, r_t, r_next, beta=BETA):
+def egm_step(c_next, Pi_t, r_t, r_next, beta=None, x_t=1.0):
+    if beta is None:
+        beta = BETA
     mu_next = U_PRIME(c_next)  # (NA,NZ)
     # W(a',z) = beta (1+r_{t+1}) sum_{z'} Pi_t[a',z,z'] u'(c_{t+1}(a',z'))
     W = beta * (1.0 + r_next) * np.einsum('azx,ax->az', Pi_t, mu_next)
     c_endog = U_PRIME_INV(W)    # (NA,NZ) at a'
     coh_endog = c_endog + AGRID[:, None]   # cash on hand needed
-    a_endog = (coh_endog - Y[None, :]) / (1.0 + r_t)
+    a_endog = (coh_endog - x_t * Y[None, :]) / (1.0 + r_t)
     g = np.empty((NA, NZ))
     for z in range(NZ):
         g[:, z] = np.interp(AGRID, a_endog[:, z], AGRID,
                             left=A_MIN, right=AGRID[-1]) # borrowing constraint
         g[AGRID < a_endog[0, z], z] = A_MIN
-    c = (1.0 + r_t) * AGRID[:, None] + Y[None, :] - g
+    c = (1.0 + r_t) * AGRID[:, None] + x_t * Y[None, :] - g
     return c, g
 
 
@@ -103,11 +142,11 @@ def forward_step(mu, g, Pi_t):
 
 
 # steady state
-def steady_state(tol=1e-12, maxit=10000):
+def steady_state(tol=1e-12, maxit=10000, beta=None):
     Pi_ss = tilted_Pi(np.zeros(NA))
     c = (R_SS * AGRID[:, None] + Y[None, :]) + 1e-2   # init
     for it in range(maxit):
-        c_new, g = egm_step(c, Pi_ss, R_SS, R_SS)
+        c_new, g = egm_step(c, Pi_ss, R_SS, R_SS, beta)
         err = np.max(np.abs(c_new - c))
         c = c_new
         if err < tol:
@@ -132,6 +171,9 @@ def make_regions(mu_end, K): # partition the a'-grid into K wealth groups of (ap
     cum = np.cumsum(marg)
     cuts = np.array([cum.searchsorted(j / K, side='left')
                      for j in range(1, K)])
+    for k in range(1, K - 1):
+        if cuts[k] <= cuts[k - 1]:
+            cuts[k] = cuts[k - 1] + 1
     masks = np.zeros((K, NA), dtype=bool)
     lo = 0
     for k in range(K):
@@ -151,10 +193,11 @@ def qbar(mu_end, masks):
 
 
 # transition-path solver (nonlinear, anticipated paths)
-def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_path=None, return_assets=False, return_kl=False): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
+def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_path=None, return_assets=False, return_kl=False, dx_path=None, return_consumption=False): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
     K = masks.shape[0]
     r_path = R_SS + np.asarray(dr_path)
     beta_path = BETA * (1.0 + (np.zeros(T) if dbeta_path is None else np.asarray(dbeta_path)))
+    x_path = 1.0 + (np.zeros(T) if dx_path is None else np.asarray(dx_path))
     dp = np.asarray(delta_paths)
     if dp.ndim == 2:
         delta_grid = np.zeros((T, NA))
@@ -169,10 +212,11 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
     cs, gs = [None] * T, [None] * T
     for t in range(T - 1, -1, -1):
         r_next = r_path[t + 1] if t + 1 < T else R_SS
-        cs[t], gs[t] = egm_step(c_next, Pis[t], r_path[t], r_next, beta_path[t])
+        cs[t], gs[t] = egm_step(c_next, Pis[t], r_path[t], r_next, beta_path[t], x_path[t])
         c_next = cs[t]
     mu = ss['mu'].copy()
     A_path = np.empty(T)
+    C_path = np.empty(T)
     kl = 0.0
     dC = np.empty(H)
     dCb = np.empty(Hb) if extra_mask is not None else None
@@ -185,6 +229,7 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
             dCb[t] = 100.0 * (np.sum(mu[extra_mask] * cs[t][extra_mask])
                               / Cb_ss - 1.0)
         A_path[t] = np.sum(mu * gs[t])
+        C_path[t] = np.sum(mu * cs[t])
         if t < T - 1 or return_kl:
             mu_next, mu_end = forward_step(mu, gs[t], Pis[t])
             if return_kl:
@@ -192,6 +237,8 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
             if t < T - 1:
                 mu = mu_next
     out = dC if extra_mask is None else np.concatenate([dC, dCb])
+    if return_consumption:
+        return out, A_path, C_path
     if return_kl:
         return (out, A_path, kl) if return_assets else (out, kl)
     return (out, A_path) if return_assets else out
@@ -217,3 +264,19 @@ def build_jacobian(ss, masks, eps_r=1e-5, eps_d=1e-4, extra_mask=None, Hb=12):
                                    extra_mask=extra_mask, Hb=Hb) / eps_d
             col += 1
     return J
+
+
+def calibrate_beta(target, lo=0.90, hi=0.999, tol=1e-6):
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if steady_state(beta=mid)['A'] < target:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < tol:
+            break
+    return 0.5 * (lo + hi)
+
+
+if BETA is None:
+    BETA = _cal.get('beta_solved') or calibrate_beta(_cal['wealth_target'])
