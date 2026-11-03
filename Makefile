@@ -20,6 +20,9 @@ results_ge_%.json: model.py entropic.py closure.py run_ge.py
 results_hank_%.json: model.py entropic.py closure.py run_ge.py
 	HANK_CALIBRATION=$* $(PY) run_ge.py --closure hank
 
+results_channels_hank.json: model.py entropic.py closure.py channels.py run_channels.py
+	$(PY) run_channels.py --closure hank
+
 results_exact_reopt.json: model.py exact.py channels.py run_exact_reopt.py
 	$(PY) run_exact_reopt.py
 

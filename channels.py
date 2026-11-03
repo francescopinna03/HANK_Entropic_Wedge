@@ -1,6 +1,6 @@
 import numpy as np
 from model import *
-from closure import ge_outputs, ge_jacobian
+from closure import ge_outputs, ge_jacobian, hank_jacobian, hank_transition
 
 
 def qbar_states(mu_end, masks):
@@ -82,3 +82,51 @@ def channel_split(u, blocks, Kc):
         m = 0.5 * (dL - dH)
         out.append(float(m @ m / (m @ m + p @ p)))
     return out
+
+
+def hank_channel_matrix(ss, JyK, JCK, cond, agg):
+    Jt, op, maps = hank_jacobian(ss, JyK, JCK, True)
+    Gr = np.vstack([JyK['r'][:H], JyK['r'][H:]])
+    Gx = np.vstack([JyK['x'][:H], JyK['x'][H:]])
+    Gb = np.vstack([JyK['b'][:H], JyK['b'][H:]])
+    cols_d = Jt[:, T:]
+    if agg == 'beta':
+        cols_a = Gb + Gr @ maps['dr']['b'] + Gx @ maps['dx']['b']
+        dr_a = maps['dr']['b']
+    else:
+        cols_a = Jt[:, :T]
+        dr_a = maps['dr']['e']
+    if cond:
+        cols_d = cols_d - Gr @ maps['dr']['d']
+        cols_a = cols_a - Gr @ dr_a
+    return np.hstack([cols_a, cols_d]), Gr
+
+
+def hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, path, extra_mask=None, Hb=12):
+    Kc = masksK.shape[0]
+    specs = [(np.zeros(T), agg_path, np.zeros((Kc, T)), None)] if agg == 'beta' else [(agg_path, None, np.zeros((Kc, T)), None)]
+    labels = ['agg']
+    for k in range(Kc):
+        dd = np.zeros((Kc, T)); dd[k] = path
+        specs.append((np.zeros(T), None, dd, None)); labels.append('P%d' % (k + 1))
+    for k in range(Kc):
+        dm = np.zeros((Kc, T)); dm[k] = path
+        specs.append((np.zeros(T), None, np.zeros((Kc, T)), dm)); labels.append('D%d' % (k + 1))
+    out = []
+    for e, db, dd, dm in specs:
+        m, dr, pi, Yp, it, res = hank_transition(ss, e, dd, masksK, JCK, extra_mask=extra_mask, Hb=Hb, dbeta=db, drift=dm)
+        out.append(m - Gr @ dr if cond else m)
+    return np.array(out), labels
+
+
+def channel_attribution(U, Kc, labels):
+    au = U.argmax(1)
+    B = len(labels)
+    region = lambda b: 0 if b == 0 else (b - 1) % Kc + 1
+    chan = lambda b: labels[b][0]
+    margin = min(np.sort(U[l])[-1] - np.sort(U[l])[-2] for l in range(B))
+    errors = ['%s->%s' % (labels[l], labels[au[l]]) for l in range(B) if au[l] != l]
+    return dict(att=au.tolist(), ok_block=bool(np.all(au == np.arange(B))),
+                ok_region=bool(all(region(au[l]) == region(l) for l in range(B))),
+                ok_channel=bool(all(chan(au[l]) == chan(l) for l in range(B))),
+                margin=float(margin), errors=errors)

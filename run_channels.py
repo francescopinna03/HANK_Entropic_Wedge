@@ -1,9 +1,13 @@
-import numpy as np, json, warnings, time
+import numpy as np, json, warnings, time, sys
 warnings.filterwarnings('ignore')
 from model import *
 from entropic import *
-from closure import ge_transition
+from closure import ge_transition, consumption_jacobians, aggregate_consumption
 from channels import *
+
+CLOSURE = sys.argv[sys.argv.index('--closure') + 1] if '--closure' in sys.argv else 'aiyagari'
+HANK = CLOSURE == 'hank'
+SUFFIX = '' if CALIBRATION == 'lab' else '_' + CALIBRATION
 
 NE = 8000
 SIGMA = 0.0025
@@ -20,23 +24,27 @@ mu_a = ss['mu'].sum(1)
 em = np.cumsum(mu_a) <= 0.5 + 1e-12
 masks8, _ = make_regions(ss['mu_end'], 8)
 qs8 = qbar_states(ss['mu_end'], masks8)
+qb8 = qbar(ss['mu_end'], masks8)
+EPS_INJ = -0.0025 * 0.8 ** np.arange(T)
 
-t0 = time.time()
-Jy8, JA8, y0, A0 = pe_jacobians_states(ss, masks8, extra_mask=em, Hb=HB)
-print('state-specific Jacobians at K=8 built in %.1fs, %d columns' % (time.time() - t0, Jy8['d'].shape[1] + 2 * T))
-results = dict(NE=NE, sigma=SIGMA, amp=AMP, dec=DEC, baseline_gap=float(np.abs(y0).max()))
 
-masks4, _ = make_regions(ss['mu_end'], 4)
-d2 = np.zeros((4, T)); d2[1] = PATH
-d3 = np.zeros((4, NZ, T)); d3[1, 0] = PATH; d3[1, 1] = PATH
-results['symmetric_reconstruction_gap'] = float(np.abs(solve_path(ss, np.zeros(T), d2, masks4) - solve_path(ss, np.zeros(T), d3, masks4)).max())
-Jy4, _ = aggregate_states(Jy8, JA8, 4)
-sym_cols = sum(Jy4['d'][:H, (1*NZ+z)*T:(1*NZ+z+1)*T] for z in range(NZ))
-d2c = np.zeros((4, T)); d2c[1, 5] = 1e-4
-ref = (solve_path(ss, np.zeros(T), d2c, masks4) - solve_path(ss, np.zeros(T), np.zeros((4, T)), masks4)) / 1e-4
-results['symmetric_column_gap'] = float(np.abs(sym_cols[:, 5] - ref).max() / np.abs(ref).max())
-print('symmetric deformation reconstructed: path gap %.1e, Jacobian column gap %.1e'
-      % (results['symmetric_reconstruction_gap'], results['symmetric_column_gap']))
+if not HANK:
+    t0 = time.time()
+    Jy8, JA8, y0, A0 = pe_jacobians_states(ss, masks8, extra_mask=em, Hb=HB)
+    print('state-specific Jacobians at K=8 built in %.1fs, %d columns' % (time.time() - t0, Jy8['d'].shape[1] + 2 * T))
+    results = dict(NE=NE, sigma=SIGMA, amp=AMP, dec=DEC, baseline_gap=float(np.abs(y0).max()))
+
+    masks4, _ = make_regions(ss['mu_end'], 4)
+    d2 = np.zeros((4, T)); d2[1] = PATH
+    d3 = np.zeros((4, NZ, T)); d3[1, 0] = PATH; d3[1, 1] = PATH
+    results['symmetric_reconstruction_gap'] = float(np.abs(solve_path(ss, np.zeros(T), d2, masks4) - solve_path(ss, np.zeros(T), d3, masks4)).max())
+    Jy4, _ = aggregate_states(Jy8, JA8, 4)
+    sym_cols = sum(Jy4['d'][:H, (1*NZ+z)*T:(1*NZ+z+1)*T] for z in range(NZ))
+    d2c = np.zeros((4, T)); d2c[1, 5] = 1e-4
+    ref = (solve_path(ss, np.zeros(T), d2c, masks4) - solve_path(ss, np.zeros(T), np.zeros((4, T)), masks4)) / 1e-4
+    results['symmetric_column_gap'] = float(np.abs(sym_cols[:, 5] - ref).max() / np.abs(ref).max())
+    print('symmetric deformation reconstructed: path gap %.1e, Jacobian column gap %.1e'
+          % (results['symmetric_reconstruction_gap'], results['symmetric_column_gap']))
 
 
 def injections(masksK, blocks, closure, with_micro):
@@ -78,6 +86,52 @@ def attribution(res, Qs, Qt):
     att = U.argmax(1)
     margin = np.array([np.sort(u)[-1] - np.sort(u)[-2] for u in U])
     return caps, U, att, margin
+
+
+if HANK:
+    t0 = time.time()
+    Jy8h, JC8h, y0h, C0h = consumption_jacobians(ss, masks8, extra_mask=em, Hb=HB, with_drift=True)
+    print('HANK consumption Jacobians with drift at K=8 built in %.1fs' % (time.time() - t0))
+    results = dict(closure=CLOSURE, calibration=CALIBRATION, NE=NE, sigma=SIGMA, amp=AMP, dec=DEC)
+
+    def hank_level(Kc, cond, agg):
+        g = 8 // Kc
+        masksK = np.array([masks8[g*k:g*(k+1)].any(0) for k in range(Kc)])
+        qbK = np.array([qb8[g*k:g*(k+1)].sum() for k in range(Kc)])
+        JyK, JCK = aggregate_consumption(Jy8h, JC8h, Kc)
+        J, Gr = hank_channel_matrix(ss, JyK, JCK, cond, agg)
+        return masksK, np.concatenate([qbK, qbK]), J, JCK, Gr
+
+    def hank_analyze(Kc, cond, agg, rho):
+        masksK, qbK, J, JCK, Gr = hank_level(Kc, cond, agg)
+        agg_path = DB_INJ if agg == 'beta' else EPS_INJ
+        res, labels = hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, PATH, extra_mask=em, Hb=HB)
+        oinv = omega_inv_diag(qbK, SIGMA, NE)
+        M = projection_matrix(J, oinv, rho)
+        Qs, Qt = quad_forms(M, oinv, 2 * Kc)
+        caps = np.array([capacity(Q, Qt)[1] for Q in Qs])
+        U = np.array([[(r @ Q @ r) / (r @ Qt @ r) for Q in Qs] for r in res]) / caps
+        out = channel_attribution(U, Kc, labels)
+        out.update(K=Kc, conditioned=cond, aggregate=agg, rho=float(rho), labels=labels, caps=caps.tolist(),
+                   info=[dict(I=float(0.5 * r @ Qt @ r), dep=dep(0.5 * r @ Qt @ r)) for r in res])
+        return out
+
+    for agg in ['eps', 'beta']:
+        for cond in [False, True]:
+            tag = '%s_%s' % (agg, 'conditioned' if cond else 'raw')
+            masks4, qb4, J4, JC4, Gr4 = hank_level(4, cond, agg)
+            res4, _ = hank_channel_injections(ss, masks4, JC4, Gr4, cond, agg, DB_INJ if agg == 'beta' else EPS_INJ, PATH, extra_mask=em, Hb=HB)
+            rho = calibrate_rho(J4, omega_inv_diag(qb4, SIGMA, NE), res4)
+            results[tag] = {}
+            for Kc in [1, 2, 4]:
+                t0 = time.time()
+                L = hank_analyze(Kc, cond, agg, rho)
+                results[tag][str(Kc)] = L
+                print('[%s] K=%d rho=%.1f | block ok=%s region ok=%s channel ok=%s margin %.3f | errors %s [%.1fs]'
+                      % (tag, Kc, rho, L['ok_block'], L['ok_region'], L['ok_channel'], L['margin'], L['errors'] if L['errors'] else '-', time.time() - t0))
+    json.dump(results, open('results_channels_hank%s.json' % SUFFIX, 'w'), indent=1)
+    print('TOTAL %.1fs' % (time.time() - t_all))
+    sys.exit(0)
 
 
 def analyze(Kc, closure, with_micro):
