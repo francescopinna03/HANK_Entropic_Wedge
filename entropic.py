@@ -30,9 +30,11 @@ def omega_inv_diag(qb, sigma_r, n_eff=1.0):
 
 
 def projection_matrix(J, oinv, rho):    #M = (Omega^{-1} + rho J'J)^{-1} rho J'  (R = rho I_H).
-    n = J.shape[1]
-    A = np.diag(oinv) + rho * (J.T @ J)
-    return np.linalg.solve(A, rho * J.T)             # (n, H)
+    if np.isscalar(rho):
+        A = np.diag(oinv) + rho * (J.T @ J)
+        return np.linalg.solve(A, rho * J.T)             # (n, H)
+    A = np.diag(oinv) + J.T @ rho @ J
+    return np.linalg.solve(A, J.T @ rho)
 
 
 def quad_forms(M, oinv, K): # Q_k = M' S_k' Omega_k^{-1} S_k M for each block (agg first), Q_tot.
@@ -148,3 +150,38 @@ def attribute(r, Qs, Q_tot): #Attribution score per block. worst pairwise p-valu
     score = np.array([max(pi[k, j] for j in range(B) if j != k)
                       for k in range(B)])
     return int(np.argmin(score)), score, s
+
+
+
+def embedding(Kc, n_agg, K8=8):
+    g = K8 // Kc
+    E = np.zeros((n_agg + K8 * T, n_agg + Kc * T))
+    E[:n_agg, :n_agg] = np.eye(n_agg)
+    for k in range(Kc):
+        for j in range(g * k, g * (k + 1)):
+            E[n_agg + j * T:n_agg + (j + 1) * T, n_agg + k * T:n_agg + (k + 1) * T] = np.eye(T)
+    return E
+
+
+def certificate(M_fine, M_coarse, E, oinv_fine, Sigma, alpha=0.05, yhat=None):
+    from scipy.stats import chi2
+    A = np.sqrt(oinv_fine)[:, None] * (M_fine - E @ M_coarse)
+    ny = M_fine.shape[1]
+    c = np.sqrt(chi2.ppf(1.0 - alpha, ny))
+    S_half = np.sqrt(Sigma) * np.eye(ny) if np.isscalar(Sigma) else linalg.sqrtm(Sigma).real
+    width = c * np.linalg.norm(A @ S_half, 2)
+    center = 0.0 if yhat is None else float(np.linalg.norm(A @ yhat))
+    return dict(center=center, width=float(width), total=float(center + width), c=float(c), amplification=float(np.linalg.norm(A, 2)))
+
+
+def horizon_correlation(n, phi):
+    idx = np.arange(n)
+    return phi ** np.abs(idx[:, None] - idx[None, :])
+
+
+def moment_covariance(s_agg, s_dist, phi, n_agg=H, n_dist=0):
+    R = np.zeros((n_agg + n_dist, n_agg + n_dist))
+    R[:n_agg, :n_agg] = s_agg ** 2 * horizon_correlation(n_agg, phi)
+    if n_dist:
+        R[n_agg:, n_agg:] = s_dist ** 2 * horizon_correlation(n_dist, phi)
+    return R

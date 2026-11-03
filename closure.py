@@ -219,3 +219,11 @@ def determinacy_monitor(op):
     return dict(phi_pi=float(op['phi_pi']), kappa_y=float(op['kappa_y']),
                 taylor_principle=bool(op['phi_pi'] > 1.0),
                 sigma_min_HU=float(s[-1]), sigma_max_HU=float(s[0]), cond_HU=float(s[0] / s[-1]))
+
+
+def conditioned_hank_jacobian(ss, Jy, JC, with_micro, kappa_y=KAPPA_Y, phi_pi=PHI_PI):
+    Jt, op, maps = hank_jacobian(ss, Jy, JC, with_micro, kappa_y, phi_pi)
+    Gr = np.vstack([Jy['r'][:H], Jy['r'][H:]]) if with_micro else Jy['r'][:H]
+    cols_e = Jt[:, :T] - Gr @ maps['dr']['e']
+    cols_d = Jt[:, T:] - Gr @ maps['dr']['d']
+    return np.hstack([cols_e, cols_d]), op, maps
