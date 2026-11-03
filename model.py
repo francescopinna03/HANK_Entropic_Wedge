@@ -320,3 +320,18 @@ def expectation_moments(ss, mus, Pis, expect):
             dS[t] = 100.0 * (np.sum(w * sd[g]) / S_ss - 1.0)
         out.append(dE); out.append(dS)
     return np.concatenate(out)
+
+
+def income_groups(ss, n=3):
+    w = ss['mu'].sum(0)
+    cw = np.cumsum(w) - w
+    if NZ <= n:
+        parts = [[z] for z in range(NZ)]
+    else:
+        parts = [[z for z in range(NZ) if j / n <= cw[z] < (j + 1) / n] for j in range(n)]
+    groups = []
+    for zs in parts:
+        g = np.zeros((NA, NZ), bool)
+        g[:, zs] = True
+        groups.append(g)
+    return groups

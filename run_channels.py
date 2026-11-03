@@ -8,6 +8,8 @@ from channels import *
 CLOSURE = sys.argv[sys.argv.index('--closure') + 1] if '--closure' in sys.argv else 'aiyagari'
 HANK = CLOSURE == 'hank'
 EXPECT = '--expectations' in sys.argv
+GROUPS = sys.argv[sys.argv.index('--groups') + 1] if '--groups' in sys.argv else 'wealth'
+SIGMA_DATA = [float(v) for v in sys.argv[sys.argv.index('--sigma') + 1].split(',')] if '--sigma' in sys.argv else None
 SUFFIX = '' if CALIBRATION == 'lab' else '_' + CALIBRATION
 
 NE = 8000
@@ -91,10 +93,20 @@ def attribution(res, Qs, Qt):
 
 if HANK:
     t0 = time.time()
-    EXP = dict(groups=list(make_regions(ss['mu_end'], 4)[0]), He=HB, h=4) if EXPECT else None
+    EXP = dict(groups=income_groups(ss) if GROUPS == 'income' else list(make_regions(ss['mu_end'], 4)[0]), He=HB, h=4) if EXPECT else None
     Jy8h, JC8h, y0h, C0h = consumption_jacobians(ss, masks8, extra_mask=em, Hb=HB, with_drift=True, expect=EXP)
     print('HANK consumption Jacobians with drift at K=8 built in %.1fs' % (time.time() - t0))
-    results = dict(closure=CLOSURE, calibration=CALIBRATION, NE=NE, sigma=SIGMA, amp=AMP, dec=DEC, expectations=EXPECT)
+    results = dict(closure=CLOSURE, calibration=CALIBRATION, NE=NE, sigma=SIGMA, amp=AMP, dec=DEC, expectations=EXPECT, groups=GROUPS, sigma_data=SIGMA_DATA)
+
+    def data_precision(ny):
+        s_c, s_e, phi = SIGMA_DATA
+        n_c = H + HB
+        Sig = np.zeros((ny, ny))
+        Sig[:H, :H] = s_c ** 2 * horizon_correlation(H, phi)
+        Sig[H:n_c, H:n_c] = s_c ** 2 * horizon_correlation(HB, phi)
+        for g in range((ny - n_c) // HB):
+            Sig[n_c + g * HB:n_c + (g + 1) * HB, n_c + g * HB:n_c + (g + 1) * HB] = s_e ** 2 * horizon_correlation(HB, phi)
+        return np.linalg.inv(Sig)
 
     def hank_level(Kc, cond, agg):
         g = 8 // Kc
@@ -150,7 +162,7 @@ if HANK:
         agg_path = DB_INJ if agg == 'beta' else EPS_INJ
         res, labels = hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, PATH, extra_mask=em, Hb=HB, expect=EXP)
         oinv = omega_inv_diag(qbK, SIGMA, NE)
-        M = projection_matrix(J, oinv, rho)
+        M = projection_matrix(J, oinv, data_precision(J.shape[0]) if SIGMA_DATA else rho)
         Qs, Qt = quad_forms(M, oinv, 2 * Kc)
         caps = np.array([capacity(Q, Qt)[1] for Q in Qs])
         U = np.array([[(r @ Q @ r) / (r @ Qt @ r) for Q in Qs] for r in res]) / caps
@@ -164,7 +176,7 @@ if HANK:
             tag = '%s_%s' % (agg, 'conditioned' if cond else 'raw')
             masks4, qb4, J4, JC4, Gr4 = hank_level(4, cond, agg)
             res4, _ = hank_channel_injections(ss, masks4, JC4, Gr4, cond, agg, DB_INJ if agg == 'beta' else EPS_INJ, PATH, extra_mask=em, Hb=HB, expect=EXP)
-            rho = calibrate_rho(J4, omega_inv_diag(qb4, SIGMA, NE), res4)
+            rho = float('nan') if SIGMA_DATA else calibrate_rho(J4, omega_inv_diag(qb4, SIGMA, NE), res4)
             results[tag] = {}
             for Kc in [1, 2, 4]:
                 t0 = time.time()
@@ -174,7 +186,7 @@ if HANK:
                       % (tag, Kc, rho, L['ok_block'], L['ok_region'], L['ok_channel'], L['margin'], L['errors'] if L['errors'] else '-', time.time() - t0))
     if EXPECT:
         results['naming'] = {str(Kc): naming_design(Kc) for Kc in [1, 2, 4]}
-    json.dump(results, open('results_channels_hank%s%s.json' % (SUFFIX, '_expectations' if EXPECT else ''), 'w'), indent=1)
+    json.dump(results, open('results_channels_hank%s%s%s.json' % (SUFFIX, '_expectations' if EXPECT else '', '_income' if GROUPS == 'income' else ''), 'w'), indent=1)
     print('TOTAL %.1fs' % (time.time() - t_all))
     sys.exit(0)
 
