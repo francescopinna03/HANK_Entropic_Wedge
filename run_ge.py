@@ -204,6 +204,58 @@ else:
           % (results['confounding']['cos_r'], results['confounding']['cos_cb'], results['confounding']['cos_all']))
     print('aggregate identity gap %.1e | linear vs nonlinear dr %.2e'
           % (results['confounding']['agg_identity_gap'], results['confounding']['linear_vs_nonlinear_dr']))
+DELTA_CERT = 0.25
+S_RATIO = [0.5, 1.0, 2.0]
+PHI_H = [0.0, 0.5, 0.9]
+cert = {}
+for cond in ([False, True] if HANK else [False]):
+    tag = 'conditioned' if cond else 'raw'
+    rho_c = results['augmented']['rho']
+    Ms, oinvs, Jts, masksKs = {}, {}, {}, {}
+    for Kc in [1, 2, 4, 8]:
+        if HANK:
+            JyK, JCK = aggregate_consumption(Jy8, JC8, Kc)
+            Jt = conditioned_hank_jacobian(ss, JyK, JCK, True)[0] if cond else hank_jacobian(ss, JyK, JCK, True)[0]
+        else:
+            JyK, JAK = aggregate_pe(Jy8, JA8, Kc)
+            Jt = ge_jacobian(JyK, JAK, True)[0]
+        g = 8 // Kc
+        qbK = np.array([qb8[g*k:g*(k+1)].sum() for k in range(Kc)])
+        oinvs[Kc] = omega_inv_diag(qbK, SIGMA_B, NE)
+        Ms[Kc] = projection_matrix(Jt, oinvs[Kc], rho_c)
+        Jts[Kc] = Jt
+        masksKs[Kc] = np.array([masks8[g*k:g*(k+1)].any(0) for k in range(Kc)])
+    inj = []
+    for k in range(4):
+        dd = np.zeros((4, T)); dd[k] = AMP * DEC ** np.arange(T)
+        if HANK:
+            JyK4, JCK4 = aggregate_consumption(Jy8, JC8, 4)
+            m, dr, pi, Yp, it, res = hank_transition(ss, np.zeros(T), dd, masksKs[4], JCK4, extra_mask=em, Hb=HB)
+            if cond:
+                m = m - np.vstack([JyK4['r'][:H], JyK4['r'][H:]]) @ dr
+        else:
+            m, dr, y, it, res = ge_transition(ss, np.zeros(T), dd, masksKs[4], JA8['r'], extra_mask=em, Hb=HB)
+        inj.append(m)
+    W8 = np.sqrt(oinvs[8])
+    u_ref = float(np.median([np.linalg.norm(W8 * (Ms[8] @ y)) for y in inj]))
+    ny = Ms[8].shape[1]
+    out = dict(rho=float(rho_c), delta=DELTA_CERT, u_ref=u_ref, n_y=int(ny), levels={})
+    for Kc in [1, 2, 4]:
+        E = embedding(Kc, T)
+        c_impl = certificate(Ms[8], Ms[Kc], E, oinvs[8], 1.0 / rho_c, ALPHA)
+        centers = [certificate(Ms[8], Ms[Kc], E, oinvs[8], 1.0 / rho_c, ALPHA, y)['center'] for y in inj]
+        req = {}
+        for sr in S_RATIO:
+            for ph in PHI_H:
+                Sig = moment_covariance(1.0, sr, ph, H, ny - H)
+                w1 = certificate(Ms[8], Ms[Kc], E, oinvs[8], Sig, ALPHA)['width']
+                req['s%.1f_phi%.1f' % (sr, ph)] = float(DELTA_CERT * u_ref / w1)
+        out['levels'][str(Kc)] = dict(width_implied=c_impl['width'], amplification=c_impl['amplification'],
+                                      centers=centers, required_se=req)
+        print('[certificate %s] K=%d | implied width %.2f vs u_ref %.2f | centers %s | required SE at delta=%.2f: s_dist=s_agg, phi=0: %.4f, phi=0.9: %.4f; s_dist=2 s_agg, phi=0.9: %.4f'
+              % (tag, Kc, c_impl['width'], u_ref, np.round(centers, 2).tolist(), DELTA_CERT, req['s1.0_phi0.0'], req['s1.0_phi0.9'], req['s2.0_phi0.9']))
+    cert[tag] = out
+results['certificate'] = cert
 results['ss'] = dict(C=ss['C'], A=ss['A'], mass_constraint=float(ss['mu'][0, :].sum()), r=R_SS, beta=BETA, NZ=NZ)
 results['masses8'] = masses8.tolist()
 json.dump(results, open(OUT, 'w'), indent=1)
