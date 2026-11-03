@@ -7,6 +7,7 @@ from channels import *
 
 CLOSURE = sys.argv[sys.argv.index('--closure') + 1] if '--closure' in sys.argv else 'aiyagari'
 HANK = CLOSURE == 'hank'
+EXPECT = '--expectations' in sys.argv
 SUFFIX = '' if CALIBRATION == 'lab' else '_' + CALIBRATION
 
 NE = 8000
@@ -90,9 +91,10 @@ def attribution(res, Qs, Qt):
 
 if HANK:
     t0 = time.time()
-    Jy8h, JC8h, y0h, C0h = consumption_jacobians(ss, masks8, extra_mask=em, Hb=HB, with_drift=True)
+    EXP = dict(groups=list(make_regions(ss['mu_end'], 4)[0]), He=HB, h=4) if EXPECT else None
+    Jy8h, JC8h, y0h, C0h = consumption_jacobians(ss, masks8, extra_mask=em, Hb=HB, with_drift=True, expect=EXP)
     print('HANK consumption Jacobians with drift at K=8 built in %.1fs' % (time.time() - t0))
-    results = dict(closure=CLOSURE, calibration=CALIBRATION, NE=NE, sigma=SIGMA, amp=AMP, dec=DEC)
+    results = dict(closure=CLOSURE, calibration=CALIBRATION, NE=NE, sigma=SIGMA, amp=AMP, dec=DEC, expectations=EXPECT)
 
     def hank_level(Kc, cond, agg):
         g = 8 // Kc
@@ -102,10 +104,51 @@ if HANK:
         J, Gr = hank_channel_matrix(ss, JyK, JCK, cond, agg)
         return masksK, np.concatenate([qbK, qbK]), J, JCK, Gr
 
+    def naming_design(Kc, s_cons=0.2, power=0.80, alpha=0.05):
+        from scipy.stats import norm
+        masksK, _ = make_regions(ss['mu_end'], Kc)
+        JyK, JCK = aggregate_consumption(Jy8h, JC8h, Kc)
+        Jt, op, maps = hank_jacobian(ss, JyK, JCK, True)
+        Gr = JyK['r']
+        nC = H + HB
+        nE = Jt.shape[0] - nC
+        zpow = norm.ppf(1 - alpha) + norm.ppf(power)
+        sig = {}
+        for chan in ['p', 'd']:
+            for k in range(Kc):
+                dd = np.zeros((Kc, T)); dm = None
+                if chan == 'p':
+                    dd[k] = PATH
+                else:
+                    dm = np.zeros((Kc, T)); dm[k] = PATH
+                m, dr, pi, Yp, it, res = hank_transition(ss, np.zeros(T), dd, masksK, JCK, extra_mask=em, Hb=HB, drift=dm, expect=EXP)
+                sig[(chan, k)] = m - Gr @ dr
+
+        def dist(sp, sds, sE):
+            w = np.concatenate([np.full(nC, 1 / s_cons), np.full(nE, 1 / sE) if sE else np.zeros(nE)])
+            A = np.array(sds).T * w[:, None]
+            b = sp * w
+            coef = np.linalg.lstsq(A, b, rcond=None)[0]
+            r = b - A @ coef
+            return float(np.sqrt(r @ r))
+
+        grid = np.logspace(-2, 1, 91)[::-1]
+        out = []
+        for k in range(Kc):
+            sp = sig[('p', k)]
+            sds = [sig[('d', j)] for j in range(Kc)]
+            d0 = dist(sp, sds, None)
+            se = next((float(x) for x in grid if dist(sp, sds, x) >= zpow), None)
+            out.append(dict(region=k + 1, distance_consumption_only=d0, required_se_expectations=se,
+                            impact_dE_persistence=sp[nC:nC + nE:2 * HB].tolist(), impact_dE_drift=sig[('d', k)][nC:nC + nE:2 * HB].tolist()))
+            print('[naming] K=%d region %d: distance with consumption only (SE %.1f) %.2f | required SE on expectation moments for %d%% power: %s'
+                  % (Kc, k + 1, s_cons, d0, int(100 * power), ('%.2f%%' % se) if se else 'none in grid'))
+        return out
+
     def hank_analyze(Kc, cond, agg, rho):
         masksK, qbK, J, JCK, Gr = hank_level(Kc, cond, agg)
         agg_path = DB_INJ if agg == 'beta' else EPS_INJ
-        res, labels = hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, PATH, extra_mask=em, Hb=HB)
+        res, labels = hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, PATH, extra_mask=em, Hb=HB, expect=EXP)
         oinv = omega_inv_diag(qbK, SIGMA, NE)
         M = projection_matrix(J, oinv, rho)
         Qs, Qt = quad_forms(M, oinv, 2 * Kc)
@@ -120,7 +163,7 @@ if HANK:
         for cond in [False, True]:
             tag = '%s_%s' % (agg, 'conditioned' if cond else 'raw')
             masks4, qb4, J4, JC4, Gr4 = hank_level(4, cond, agg)
-            res4, _ = hank_channel_injections(ss, masks4, JC4, Gr4, cond, agg, DB_INJ if agg == 'beta' else EPS_INJ, PATH, extra_mask=em, Hb=HB)
+            res4, _ = hank_channel_injections(ss, masks4, JC4, Gr4, cond, agg, DB_INJ if agg == 'beta' else EPS_INJ, PATH, extra_mask=em, Hb=HB, expect=EXP)
             rho = calibrate_rho(J4, omega_inv_diag(qb4, SIGMA, NE), res4)
             results[tag] = {}
             for Kc in [1, 2, 4]:
@@ -129,7 +172,9 @@ if HANK:
                 results[tag][str(Kc)] = L
                 print('[%s] K=%d rho=%.1f | block ok=%s region ok=%s channel ok=%s margin %.3f | errors %s [%.1fs]'
                       % (tag, Kc, rho, L['ok_block'], L['ok_region'], L['ok_channel'], L['margin'], L['errors'] if L['errors'] else '-', time.time() - t0))
-    json.dump(results, open('results_channels_hank%s.json' % SUFFIX, 'w'), indent=1)
+    if EXPECT:
+        results['naming'] = {str(Kc): naming_design(Kc) for Kc in [1, 2, 4]}
+    json.dump(results, open('results_channels_hank%s%s.json' % (SUFFIX, '_expectations' if EXPECT else ''), 'w'), indent=1)
     print('TOTAL %.1fs' % (time.time() - t_all))
     sys.exit(0)
 
