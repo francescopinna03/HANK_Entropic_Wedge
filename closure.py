@@ -92,19 +92,20 @@ def cosine(u, v):
     return float(u @ v / np.sqrt((u @ u) * (v @ v)))
 
 
-def hank_outputs(ss, dr, dx, dbeta, delta, masks, extra_mask=None, Hb=12):
+def hank_outputs(ss, dr, dx, dbeta, delta, masks, extra_mask=None, Hb=12, drift=None):
     return solve_path(ss, dr, delta, masks, extra_mask=extra_mask, Hb=Hb,
-                      dbeta_path=dbeta, dx_path=dx, return_consumption=True)
+                      dbeta_path=dbeta, dx_path=dx, return_consumption=True, drift_paths=drift)
 
 
-def consumption_jacobians(ss, masks, extra_mask=None, Hb=12, eps_r=1e-5, eps_b=1e-5, eps_d=1e-4, eps_x=1e-5):
+def consumption_jacobians(ss, masks, extra_mask=None, Hb=12, eps_r=1e-5, eps_b=1e-5, eps_d=1e-4, eps_x=1e-5, with_drift=False):
     K = masks.shape[0]
     zr = np.zeros(T)
     zd = np.zeros((K, T))
     y0, A0, C0 = hank_outputs(ss, zr, zr, zr, zd, masks, extra_mask, Hb)
     Hm = y0.size
-    Jy = dict(r=np.empty((Hm, T)), b=np.empty((Hm, T)), d=np.empty((Hm, K * T)), x=np.empty((Hm, T)))
-    JC = dict(r=np.empty((T, T)), b=np.empty((T, T)), d=np.empty((T, K * T)), x=np.empty((T, T)))
+    nd = (2 if with_drift else 1) * K * T
+    Jy = dict(r=np.empty((Hm, T)), b=np.empty((Hm, T)), d=np.empty((Hm, nd)), x=np.empty((Hm, T)))
+    JC = dict(r=np.empty((T, T)), b=np.empty((T, T)), d=np.empty((T, nd)), x=np.empty((T, T)))
     for s in range(T):
         dr = np.zeros(T); dr[s] = eps_r
         y, A, C = hank_outputs(ss, dr, zr, zr, zd, masks, extra_mask, Hb)
@@ -124,16 +125,24 @@ def consumption_jacobians(ss, masks, extra_mask=None, Hb=12, eps_r=1e-5, eps_b=1
             y, A, C = hank_outputs(ss, zr, zr, zr, dd, masks, extra_mask, Hb)
             Jy['d'][:, k * T + s] = (y - y0) / eps_d
             JC['d'][:, k * T + s] = (C - C0) / eps_d
+            if with_drift:
+                dm = np.zeros((K, T)); dm[k, s] = eps_d
+                y, A, C = hank_outputs(ss, zr, zr, zr, zd, masks, extra_mask, Hb, dm)
+                Jy['d'][:, (K + k) * T + s] = (y - y0) / eps_d
+                JC['d'][:, (K + k) * T + s] = (C - C0) / eps_d
     return Jy, JC, y0, C0
 
 
 def aggregate_consumption(Jy, JC, Kc, K8=8):
     g = K8 // Kc
-    Jyd = np.empty((Jy['d'].shape[0], Kc * T))
-    JCd = np.empty((T, Kc * T))
-    for k in range(Kc):
-        Jyd[:, k*T:(k+1)*T] = sum(Jy['d'][:, j*T:(j+1)*T] for j in range(g*k, g*(k+1)))
-        JCd[:, k*T:(k+1)*T] = sum(JC['d'][:, j*T:(j+1)*T] for j in range(g*k, g*(k+1)))
+    nb = Jy['d'].shape[1] // (K8 * T)
+    Jyd = np.empty((Jy['d'].shape[0], nb * Kc * T))
+    JCd = np.empty((T, nb * Kc * T))
+    for b in range(nb):
+        for k in range(Kc):
+            cols = [(b * K8 + j) * T for j in range(g*k, g*(k+1))]
+            Jyd[:, (b*Kc+k)*T:(b*Kc+k+1)*T] = sum(Jy['d'][:, c:c+T] for c in cols)
+            JCd[:, (b*Kc+k)*T:(b*Kc+k+1)*T] = sum(JC['d'][:, c:c+T] for c in cols)
     return dict(r=Jy['r'], b=Jy['b'], d=Jyd, x=Jy['x']), dict(r=JC['r'], b=JC['b'], d=JCd, x=JC['x'])
 
 
@@ -164,7 +173,7 @@ def hank_jacobian(ss, Jy, JC, with_micro, kappa_y=KAPPA_Y, phi_pi=PHI_PI):
     return np.hstack([rows['e'], rows['d']]), op, dict(dY=dY, dr=dr, dx=dx)
 
 
-def hank_transition(ss, eps, delta, masks, JC, extra_mask=None, Hb=12, dbeta=None, kappa_y=KAPPA_Y, phi_pi=PHI_PI, tol=1e-10, maxit=80):
+def hank_transition(ss, eps, delta, masks, JC, extra_mask=None, Hb=12, dbeta=None, kappa_y=KAPPA_Y, phi_pi=PHI_PI, tol=1e-10, maxit=80, drift=None):
     op = hank_operators(ss, JC, kappa_y, phi_pi)
     Y_ss, B, F, G = op['Y_ss'], op['B'], op['F'], op['G']
     db = np.zeros(T) if dbeta is None else dbeta
@@ -176,7 +185,7 @@ def hank_transition(ss, eps, delta, masks, JC, extra_mask=None, Hb=12, dbeta=Non
 
     def residual(Y, pi):
         r, X = paths(Y, pi)
-        y, A, C = hank_outputs(ss, r - R_SS, X - 1.0, db, delta, masks, extra_mask, Hb)
+        y, A, C = hank_outputs(ss, r - R_SS, X - 1.0, db, delta, masks, extra_mask, Hb, drift)
         gY = Y - C
         gpi = pi - kappa_y * np.log(Y / Y_ss) - BETA * (F @ pi)
         return np.concatenate([gY, gpi]), y, r, C

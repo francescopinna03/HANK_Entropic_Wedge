@@ -92,11 +92,14 @@ U_PRIME_INV = lambda w: w ** (-1.0 / GAMMA)
 
 
 # tilted transition matrices, state-dependent in end-of-period assets
-def tilted_Pi(delta_on_grid):
+def tilted_Pi(delta_on_grid, drift_on_grid=None):
     Pi = np.empty((NA, NZ, NZ))
     scale = 1.0 + np.asarray(delta_on_grid)                      # (NA,)
     off = PI0 * (1.0 - np.eye(NZ))                   # off-diagonal part
     Pi[:] = off[None, :, :] * (scale[:, :, None] if scale.ndim == 2 else scale[:, None, None])
+    if drift_on_grid is not None:
+        sgn = np.sign(np.arange(NZ)[None, :] - np.arange(NZ)[:, None])
+        Pi *= 1.0 + np.asarray(drift_on_grid)[:, None, None] * sgn[None, :, :]
     rowsum_off = Pi.sum(axis=2)                      # (NA,NZ)
     for z in range(NZ):
         Pi[:, z, z] = 1.0 - rowsum_off[:, z]
@@ -193,7 +196,7 @@ def qbar(mu_end, masks):
 
 
 # transition-path solver (nonlinear, anticipated paths)
-def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_path=None, return_assets=False, return_kl=False, dx_path=None, return_consumption=False): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
+def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_path=None, return_assets=False, return_kl=False, dx_path=None, return_consumption=False, drift_paths=None): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
     K = masks.shape[0]
     r_path = R_SS + np.asarray(dr_path)
     beta_path = BETA * (1.0 + (np.zeros(T) if dbeta_path is None else np.asarray(dbeta_path)))
@@ -207,7 +210,13 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
         delta_grid = np.zeros((T, NA, NZ))
         for k in range(K):
             delta_grid[:, masks[k], :] += dp[k].T[:, None, :]
-    Pis = [tilted_Pi(delta_grid[t]) for t in range(T)]
+    if drift_paths is None:
+        Pis = [tilted_Pi(delta_grid[t]) for t in range(T)]
+    else:
+        drift_grid = np.zeros((T, NA))
+        for k in range(K):
+            drift_grid[:, masks[k]] += np.asarray(drift_paths)[k][:, None]
+        Pis = [tilted_Pi(delta_grid[t], drift_grid[t]) for t in range(T)]
     c_next = ss['c']
     cs, gs = [None] * T, [None] * T
     for t in range(T - 1, -1, -1):
