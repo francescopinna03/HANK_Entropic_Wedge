@@ -98,8 +98,15 @@ def mc_tail(s_obs, Q_k, Q_tot, n_draws=400_000, seed=0):
 
 # capacity and confounding direction (Def. 10.1)
 def capacity(Q_k, Q_tot):
-    w, V = linalg.eigh(Q_k, Q_tot)
-    return float(w[0]), float(w[-1]), V[:, -1]
+    try:
+        w, V = linalg.eigh(Q_k, Q_tot)
+        return float(w[0]), float(w[-1]), V[:, -1]
+    except np.linalg.LinAlgError:
+        wt, Vt = np.linalg.eigh(Q_tot)
+        keep = wt > 1e-10 * wt.max()
+        B = Vt[:, keep] / np.sqrt(wt[keep])
+        w, V = np.linalg.eigh(B.T @ Q_k @ B)
+        return float(w[0]), float(w[-1]), B @ V[:, -1]
 
 
 def cos_angle_qtot(r, v, Q_tot):

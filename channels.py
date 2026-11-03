@@ -102,7 +102,7 @@ def hank_channel_matrix(ss, JyK, JCK, cond, agg):
     return np.hstack([cols_a, cols_d]), Gr
 
 
-def hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, path, extra_mask=None, Hb=12):
+def hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, path, extra_mask=None, Hb=12, expect=None):
     Kc = masksK.shape[0]
     specs = [(np.zeros(T), agg_path, np.zeros((Kc, T)), None)] if agg == 'beta' else [(agg_path, None, np.zeros((Kc, T)), None)]
     labels = ['agg']
@@ -114,7 +114,7 @@ def hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, path, extr
         specs.append((np.zeros(T), None, np.zeros((Kc, T)), dm)); labels.append('D%d' % (k + 1))
     out = []
     for e, db, dd, dm in specs:
-        m, dr, pi, Yp, it, res = hank_transition(ss, e, dd, masksK, JCK, extra_mask=extra_mask, Hb=Hb, dbeta=db, drift=dm)
+        m, dr, pi, Yp, it, res = hank_transition(ss, e, dd, masksK, JCK, extra_mask=extra_mask, Hb=Hb, dbeta=db, drift=dm, expect=expect)
         out.append(m - Gr @ dr if cond else m)
     return np.array(out), labels
 

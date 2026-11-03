@@ -92,42 +92,42 @@ def cosine(u, v):
     return float(u @ v / np.sqrt((u @ u) * (v @ v)))
 
 
-def hank_outputs(ss, dr, dx, dbeta, delta, masks, extra_mask=None, Hb=12, drift=None):
+def hank_outputs(ss, dr, dx, dbeta, delta, masks, extra_mask=None, Hb=12, drift=None, expect=None):
     return solve_path(ss, dr, delta, masks, extra_mask=extra_mask, Hb=Hb,
-                      dbeta_path=dbeta, dx_path=dx, return_consumption=True, drift_paths=drift)
+                      dbeta_path=dbeta, dx_path=dx, return_consumption=True, drift_paths=drift, expect=expect)
 
 
-def consumption_jacobians(ss, masks, extra_mask=None, Hb=12, eps_r=1e-5, eps_b=1e-5, eps_d=1e-4, eps_x=1e-5, with_drift=False):
+def consumption_jacobians(ss, masks, extra_mask=None, Hb=12, eps_r=1e-5, eps_b=1e-5, eps_d=1e-4, eps_x=1e-5, with_drift=False, expect=None):
     K = masks.shape[0]
     zr = np.zeros(T)
     zd = np.zeros((K, T))
-    y0, A0, C0 = hank_outputs(ss, zr, zr, zr, zd, masks, extra_mask, Hb)
+    y0, A0, C0 = hank_outputs(ss, zr, zr, zr, zd, masks, extra_mask, Hb, None, expect)
     Hm = y0.size
     nd = (2 if with_drift else 1) * K * T
     Jy = dict(r=np.empty((Hm, T)), b=np.empty((Hm, T)), d=np.empty((Hm, nd)), x=np.empty((Hm, T)))
     JC = dict(r=np.empty((T, T)), b=np.empty((T, T)), d=np.empty((T, nd)), x=np.empty((T, T)))
     for s in range(T):
         dr = np.zeros(T); dr[s] = eps_r
-        y, A, C = hank_outputs(ss, dr, zr, zr, zd, masks, extra_mask, Hb)
+        y, A, C = hank_outputs(ss, dr, zr, zr, zd, masks, extra_mask, Hb, None, expect)
         Jy['r'][:, s] = (y - y0) / eps_r
         JC['r'][:, s] = (C - C0) / eps_r
         dx = np.zeros(T); dx[s] = eps_x
-        y, A, C = hank_outputs(ss, zr, dx, zr, zd, masks, extra_mask, Hb)
+        y, A, C = hank_outputs(ss, zr, dx, zr, zd, masks, extra_mask, Hb, None, expect)
         Jy['x'][:, s] = (y - y0) / eps_x
         JC['x'][:, s] = (C - C0) / eps_x
         db = np.zeros(T); db[s] = eps_b
-        y, A, C = hank_outputs(ss, zr, zr, db, zd, masks, extra_mask, Hb)
+        y, A, C = hank_outputs(ss, zr, zr, db, zd, masks, extra_mask, Hb, None, expect)
         Jy['b'][:, s] = (y - y0) / eps_b
         JC['b'][:, s] = (C - C0) / eps_b
     for k in range(K):
         for s in range(T):
             dd = np.zeros((K, T)); dd[k, s] = eps_d
-            y, A, C = hank_outputs(ss, zr, zr, zr, dd, masks, extra_mask, Hb)
+            y, A, C = hank_outputs(ss, zr, zr, zr, dd, masks, extra_mask, Hb, None, expect)
             Jy['d'][:, k * T + s] = (y - y0) / eps_d
             JC['d'][:, k * T + s] = (C - C0) / eps_d
             if with_drift:
                 dm = np.zeros((K, T)); dm[k, s] = eps_d
-                y, A, C = hank_outputs(ss, zr, zr, zr, zd, masks, extra_mask, Hb, dm)
+                y, A, C = hank_outputs(ss, zr, zr, zr, zd, masks, extra_mask, Hb, dm, expect)
                 Jy['d'][:, (K + k) * T + s] = (y - y0) / eps_d
                 JC['d'][:, (K + k) * T + s] = (C - C0) / eps_d
     return Jy, JC, y0, C0
@@ -173,7 +173,7 @@ def hank_jacobian(ss, Jy, JC, with_micro, kappa_y=KAPPA_Y, phi_pi=PHI_PI):
     return np.hstack([rows['e'], rows['d']]), op, dict(dY=dY, dr=dr, dx=dx)
 
 
-def hank_transition(ss, eps, delta, masks, JC, extra_mask=None, Hb=12, dbeta=None, kappa_y=KAPPA_Y, phi_pi=PHI_PI, tol=1e-10, maxit=80, drift=None):
+def hank_transition(ss, eps, delta, masks, JC, extra_mask=None, Hb=12, dbeta=None, kappa_y=KAPPA_Y, phi_pi=PHI_PI, tol=1e-10, maxit=80, drift=None, expect=None):
     op = hank_operators(ss, JC, kappa_y, phi_pi)
     Y_ss, B, F, G = op['Y_ss'], op['B'], op['F'], op['G']
     db = np.zeros(T) if dbeta is None else dbeta
@@ -185,7 +185,7 @@ def hank_transition(ss, eps, delta, masks, JC, extra_mask=None, Hb=12, dbeta=Non
 
     def residual(Y, pi):
         r, X = paths(Y, pi)
-        y, A, C = hank_outputs(ss, r - R_SS, X - 1.0, db, delta, masks, extra_mask, Hb, drift)
+        y, A, C = hank_outputs(ss, r - R_SS, X - 1.0, db, delta, masks, extra_mask, Hb, drift, expect)
         gY = Y - C
         gpi = pi - kappa_y * np.log(Y / Y_ss) - BETA * (F @ pi)
         return np.concatenate([gY, gpi]), y, r, C

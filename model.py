@@ -196,7 +196,7 @@ def qbar(mu_end, masks):
 
 
 # transition-path solver (nonlinear, anticipated paths)
-def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_path=None, return_assets=False, return_kl=False, dx_path=None, return_consumption=False, drift_paths=None): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
+def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_path=None, return_assets=False, return_kl=False, dx_path=None, return_consumption=False, drift_paths=None, expect=None): #dr_path: (T,) deviations of r_t; delta_paths: (K,T) regional tilts. Households at t=0 learn the whole path (perfect foresight)
     K = masks.shape[0]
     r_path = R_SS + np.asarray(dr_path)
     beta_path = BETA * (1.0 + (np.zeros(T) if dbeta_path is None else np.asarray(dbeta_path)))
@@ -224,6 +224,7 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
         cs[t], gs[t] = egm_step(c_next, Pis[t], r_path[t], r_next, beta_path[t], x_path[t])
         c_next = cs[t]
     mu = ss['mu'].copy()
+    mus = [None] * T
     A_path = np.empty(T)
     C_path = np.empty(T)
     kl = 0.0
@@ -232,6 +233,7 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
     if extra_mask is not None:
         Cb_ss = float(np.sum(ss['mu'][extra_mask] * ss['c'][extra_mask]))
     for t in range(T):
+        mus[t] = mu
         if t < H:
             dC[t] = 100.0 * (np.sum(mu * cs[t]) / ss['C'] - 1.0)
         if extra_mask is not None and t < Hb:
@@ -246,6 +248,8 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
             if t < T - 1:
                 mu = mu_next
     out = dC if extra_mask is None else np.concatenate([dC, dCb])
+    if expect is not None:
+        out = np.concatenate([out, expectation_moments(ss, mus, Pis, expect)])
     if return_consumption:
         return out, A_path, C_path
     if return_kl:
@@ -289,3 +293,30 @@ def calibrate_beta(target, lo=0.90, hi=0.999, tol=1e-6):
 
 if BETA is None:
     BETA = _cal.get('beta_solved') or calibrate_beta(_cal['wealth_target'])
+
+
+def income_forecast(Pis, t, h):
+    P = np.repeat(np.eye(NZ)[None, :, :], NA, axis=0)
+    for j in range(h):
+        P = P @ Pis[min(t + j, len(Pis) - 1)]
+    m1 = P @ Y
+    m2 = P @ (Y ** 2)
+    return m1, np.sqrt(np.maximum(m2 - m1 ** 2, 0.0))
+
+
+def expectation_moments(ss, mus, Pis, expect):
+    groups, He, h = expect['groups'], expect['He'], expect['h']
+    Pi_ss = tilted_Pi(np.zeros(NA))
+    m1_ss, sd_ss = income_forecast([Pi_ss], 0, h)
+    out = []
+    for g in groups:
+        E_ss = np.sum(ss['mu'][g] * m1_ss[g]) / np.sum(ss['mu'][g])
+        S_ss = np.sum(ss['mu'][g] * sd_ss[g]) / np.sum(ss['mu'][g])
+        dE, dS = np.empty(He), np.empty(He)
+        for t in range(He):
+            m1, sd = income_forecast(Pis, t, h)
+            w = mus[t][g] / np.sum(mus[t][g])
+            dE[t] = 100.0 * (np.sum(w * m1[g]) / E_ss - 1.0)
+            dS[t] = 100.0 * (np.sum(w * sd[g]) / S_ss - 1.0)
+        out.append(dE); out.append(dS)
+    return np.concatenate(out)
