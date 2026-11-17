@@ -311,30 +311,24 @@ def expectation_moments(ss, mus, Pis, expect, x_path):
     Pi_ss = tilted_Pi(np.zeros(NA))
     m1_ss, sd_ss = income_forecast([Pi_ss], 0, h)
     out = []
+    mass = lambda m, g: m[g] if g.dtype == bool else m * g
+    pick = lambda v, g: v[g] if g.dtype == bool else v
     for g in groups:
-        E_ss = np.sum(ss['mu'][g] * m1_ss[g]) / np.sum(ss['mu'][g])
-        S_ss = np.sum(ss['mu'][g] * sd_ss[g]) / np.sum(ss['mu'][g])
+        E_ss = np.sum(mass(ss['mu'], g) * pick(m1_ss, g)) / np.sum(mass(ss['mu'], g))
+        S_ss = np.sum(mass(ss['mu'], g) * pick(sd_ss, g)) / np.sum(mass(ss['mu'], g))
         dE, dS = np.empty(He), np.empty(He)
         for t in range(He):
             m1, sd = income_forecast(Pis, t, h)
-            w = mus[t][g] / np.sum(mus[t][g])
+            w = mass(mus[t], g) / np.sum(mass(mus[t], g))
             x = x_path[t + h] if t + h < len(x_path) else 1.0
-            dE[t] = 100.0 * (x * np.sum(w * m1[g]) / E_ss - 1.0)
-            dS[t] = 100.0 * (x * np.sum(w * sd[g]) / S_ss - 1.0)
+            dE[t] = 100.0 * (x * np.sum(w * pick(m1, g)) / E_ss - 1.0)
+            dS[t] = 100.0 * (x * np.sum(w * pick(sd, g)) / S_ss - 1.0)
         out.append(dE); out.append(dS)
     return np.concatenate(out)
 
 
-def income_groups(ss, n=3):
-    w = ss['mu'].sum(0)
-    cw = np.cumsum(w) - w
-    if NZ <= n:
-        parts = [[z] for z in range(NZ)]
-    else:
-        parts = [[z for z in range(NZ) if j / n <= cw[z] < (j + 1) / n] for j in range(n)]
-    groups = []
-    for zs in parts:
-        g = np.zeros((NA, NZ), bool)
-        g[:, zs] = True
-        groups.append(g)
-    return groups
+def income_groups(ss, n=5):
+    w = ss['mu'].sum(0) / ss['mu'].sum()
+    hi = np.cumsum(w)
+    lo = hi - w
+    return [np.tile(np.clip((np.minimum(hi, (j + 1) / n) - np.maximum(lo, j / n)) / w, 0.0, 1.0), (NA, 1)) for j in range(n)]

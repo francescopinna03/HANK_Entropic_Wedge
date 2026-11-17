@@ -13,7 +13,7 @@ SIGMA_DATA = [float(v) for v in sys.argv[sys.argv.index('--sigma') + 1].split(',
 AGGREGATE = '--aggregate' in sys.argv
 SUFFIX = '' if CALIBRATION == 'lab' else '_' + CALIBRATION
 
-NE = 8000
+NE = int(sys.argv[sys.argv.index('--households') + 1]) if '--households' in sys.argv else 8000
 SIGMA = 0.0025
 DEC = 0.85
 AMP = 0.15
@@ -201,7 +201,7 @@ if HANK:
                 print('    linear approximation error (agg, P, D) | ' + ' | '.join('%s %s' % (p, ' '.join('%.3f' % max(v for s, v in e.items() if s[0] == c) for c in 'aPD')) for p, e in L['approximation'].items()))
     if EXPECT:
         results['naming'] = {str(Kc): naming_design(Kc) for Kc in [1, 2, 4]}
-    json.dump(results, open('results_channels_hank%s%s%s%s.json' % (SUFFIX, '_expectations' if EXPECT else '', '_income' if GROUPS == 'income' else '', '_aggregate' if AGGREGATE else ''), 'w'), indent=1)
+    json.dump(results, open('results_channels_hank%s%s%s%s%s.json' % (SUFFIX, '_expectations' if EXPECT else '', '_income' if GROUPS == 'income' else '', '_aggregate' if AGGREGATE else '', '_n%d' % NE if '--households' in sys.argv else ''), 'w'), indent=1)
     print('TOTAL %.1fs' % (time.time() - t_all))
     sys.exit(0)
 
