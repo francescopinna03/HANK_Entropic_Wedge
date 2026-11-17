@@ -217,10 +217,7 @@ def hank_transition(ss, eps, delta, masks, JC, extra_mask=None, Hb=12, dbeta=Non
         Binv = Binv + np.outer(step - Binv @ df, step @ Binv) / (step @ Binv @ df)
         f = f_new
         it += 1
-    m = y[:H]
-    if extra_mask is not None:
-        m = np.concatenate([m, y[H:]])
-    return m, r - R_SS, pi, Y, it, float(np.max(np.abs(f)))
+    return y, r - R_SS, pi, Y, it, float(np.max(np.abs(f)))
 
 
 def determinacy_monitor(op):

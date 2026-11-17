@@ -10,6 +10,7 @@ HANK = CLOSURE == 'hank'
 EXPECT = '--expectations' in sys.argv
 GROUPS = sys.argv[sys.argv.index('--groups') + 1] if '--groups' in sys.argv else 'wealth'
 SIGMA_DATA = [float(v) for v in sys.argv[sys.argv.index('--sigma') + 1].split(',')] if '--sigma' in sys.argv else None
+AGGREGATE = '--aggregate' in sys.argv
 SUFFIX = '' if CALIBRATION == 'lab' else '_' + CALIBRATION
 
 NE = 8000
@@ -25,6 +26,8 @@ t_all = time.time()
 ss = steady_state()
 mu_a = ss['mu'].sum(1)
 em = np.cumsum(mu_a) <= 0.5 + 1e-12
+EM = None if AGGREGATE else em
+NB = 0 if AGGREGATE else HB
 masks8, _ = make_regions(ss['mu_end'], 8)
 qs8 = qbar_states(ss['mu_end'], masks8)
 qb8 = qbar(ss['mu_end'], masks8)
@@ -94,19 +97,29 @@ def attribution(res, Qs, Qt):
 if HANK:
     t0 = time.time()
     EXP = dict(groups=income_groups(ss) if GROUPS == 'income' else list(make_regions(ss['mu_end'], 4)[0]), He=HB, h=4) if EXPECT else None
-    Jy8h, JC8h, y0h, C0h = consumption_jacobians(ss, masks8, extra_mask=em, Hb=HB, with_drift=True, expect=EXP)
+    Jy8h, JC8h, y0h, C0h = consumption_jacobians(ss, masks8, extra_mask=EM, Hb=HB, with_drift=True, expect=EXP)
     print('HANK consumption Jacobians with drift at K=8 built in %.1fs' % (time.time() - t0))
-    results = dict(closure=CLOSURE, calibration=CALIBRATION, NE=NE, sigma=SIGMA, amp=AMP, dec=DEC, expectations=EXPECT, groups=GROUPS, sigma_data=SIGMA_DATA)
+    results = dict(closure=CLOSURE, calibration=CALIBRATION, NE=NE, sigma=SIGMA, amp=AMP, dec=DEC, expectations=EXPECT, groups=GROUPS, sigma_data=SIGMA_DATA, aggregate=AGGREGATE)
 
     def data_precision(ny):
         s_c, s_e, phi = SIGMA_DATA
-        n_c = H + HB
+        n_c = H + NB
         Sig = np.zeros((ny, ny))
         Sig[:H, :H] = s_c ** 2 * horizon_correlation(H, phi)
-        Sig[H:n_c, H:n_c] = s_c ** 2 * horizon_correlation(HB, phi)
+        Sig[H:n_c, H:n_c] = s_c ** 2 * horizon_correlation(NB, phi)
         for g in range((ny - n_c) // HB):
             Sig[n_c + g * HB:n_c + (g + 1) * HB, n_c + g * HB:n_c + (g + 1) * HB] = s_e ** 2 * horizon_correlation(HB, phi)
         return np.linalg.inv(Sig)
+
+    def approximation_error(res, lin, labels):
+        nC = H + NB
+        parts = dict(aggregate=list(range(H)))
+        if NB:
+            parts['poorer_half'] = list(range(H, nC))
+        for g in range((res.shape[1] - nC) // (2 * HB)):
+            parts.setdefault('expected_income', []).extend(range(nC + 2 * g * HB, nC + (2 * g + 1) * HB))
+            parts.setdefault('expected_income_sd', []).extend(range(nC + (2 * g + 1) * HB, nC + (2 * g + 2) * HB))
+        return {p: {s: float(np.linalg.norm(res[l][i] - lin[l][i]) / np.linalg.norm(res[l][i])) for l, s in enumerate(labels)} for p, i in parts.items()}
 
     def hank_level(Kc, cond, agg):
         g = 8 // Kc
@@ -122,7 +135,7 @@ if HANK:
         JyK, JCK = aggregate_consumption(Jy8h, JC8h, Kc)
         Jt, op, maps = hank_jacobian(ss, JyK, JCK, True)
         Gr = JyK['r']
-        nC = H + HB
+        nC = H + NB
         nE = Jt.shape[0] - nC
         zpow = norm.ppf(1 - alpha) + norm.ppf(power)
         sig = {}
@@ -133,7 +146,7 @@ if HANK:
                     dd[k] = PATH
                 else:
                     dm = np.zeros((Kc, T)); dm[k] = PATH
-                m, dr, pi, Yp, it, res = hank_transition(ss, np.zeros(T), dd, masksK, JCK, extra_mask=em, Hb=HB, drift=dm, expect=EXP)
+                m, dr, pi, Yp, it, res = hank_transition(ss, np.zeros(T), dd, masksK, JCK, extra_mask=EM, Hb=HB, drift=dm, expect=EXP)
                 sig[(chan, k)] = m - Gr @ dr
 
         def dist(sp, sds, sE):
@@ -160,14 +173,15 @@ if HANK:
     def hank_analyze(Kc, cond, agg, rho):
         masksK, qbK, J, JCK, Gr = hank_level(Kc, cond, agg)
         agg_path = DB_INJ if agg == 'beta' else EPS_INJ
-        res, labels = hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, PATH, extra_mask=em, Hb=HB, expect=EXP)
+        res, labels = hank_channel_injections(ss, masksK, JCK, Gr, cond, agg, agg_path, PATH, extra_mask=EM, Hb=HB, expect=EXP)
+        lin = [J[:, l * T:(l + 1) * T] @ (PATH if l else agg_path) for l in range(len(labels))]
         oinv = omega_inv_diag(qbK, SIGMA, NE)
         M = projection_matrix(J, oinv, data_precision(J.shape[0]) if SIGMA_DATA else rho)
         Qs, Qt = quad_forms(M, oinv, 2 * Kc)
         caps = np.array([capacity(Q, Qt)[1] for Q in Qs])
         U = np.array([[(r @ Q @ r) / (r @ Qt @ r) for Q in Qs] for r in res]) / caps
         out = channel_attribution(U, Kc, labels)
-        out.update(K=Kc, conditioned=cond, aggregate=agg, rho=float(rho), labels=labels, caps=caps.tolist(),
+        out.update(K=Kc, conditioned=cond, aggregate=agg, rho=float(rho), labels=labels, caps=caps.tolist(), approximation=approximation_error(res, lin, labels),
                    info=[dict(I=float(0.5 * r @ Qt @ r), dep=dep(0.5 * r @ Qt @ r)) for r in res])
         return out
 
@@ -175,7 +189,7 @@ if HANK:
         for cond in [False, True]:
             tag = '%s_%s' % (agg, 'conditioned' if cond else 'raw')
             masks4, qb4, J4, JC4, Gr4 = hank_level(4, cond, agg)
-            res4, _ = hank_channel_injections(ss, masks4, JC4, Gr4, cond, agg, DB_INJ if agg == 'beta' else EPS_INJ, PATH, extra_mask=em, Hb=HB, expect=EXP)
+            res4, _ = hank_channel_injections(ss, masks4, JC4, Gr4, cond, agg, DB_INJ if agg == 'beta' else EPS_INJ, PATH, extra_mask=EM, Hb=HB, expect=EXP)
             rho = float('nan') if SIGMA_DATA else calibrate_rho(J4, omega_inv_diag(qb4, SIGMA, NE), res4)
             results[tag] = {}
             for Kc in [1, 2, 4]:
@@ -184,9 +198,10 @@ if HANK:
                 results[tag][str(Kc)] = L
                 print('[%s] K=%d rho=%.1f | block ok=%s region ok=%s channel ok=%s margin %.3f | errors %s [%.1fs]'
                       % (tag, Kc, rho, L['ok_block'], L['ok_region'], L['ok_channel'], L['margin'], L['errors'] if L['errors'] else '-', time.time() - t0))
+                print('    linear approximation error (agg, P, D) | ' + ' | '.join('%s %s' % (p, ' '.join('%.3f' % max(v for s, v in e.items() if s[0] == c) for c in 'aPD')) for p, e in L['approximation'].items()))
     if EXPECT:
         results['naming'] = {str(Kc): naming_design(Kc) for Kc in [1, 2, 4]}
-    json.dump(results, open('results_channels_hank%s%s%s.json' % (SUFFIX, '_expectations' if EXPECT else '', '_income' if GROUPS == 'income' else ''), 'w'), indent=1)
+    json.dump(results, open('results_channels_hank%s%s%s%s.json' % (SUFFIX, '_expectations' if EXPECT else '', '_income' if GROUPS == 'income' else '', '_aggregate' if AGGREGATE else ''), 'w'), indent=1)
     print('TOTAL %.1fs' % (time.time() - t_all))
     sys.exit(0)
 
