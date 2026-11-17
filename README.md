@@ -1,80 +1,306 @@
-# Minimum-action diagnostics of distributional misspecification in HANK models
+# Diagnostics of distributional misspecification in HANK models
 
-Numerical laboratory for the M.Sc. thesis of Francesco Pinna (LUISS Guido Carli, Department of Economics and Finance).
+Code for the M.Sc. thesis of Francesco Pinna, Department of Economics and Finance, LUISS Guido Carli.
 
-## Research Question
+## Summary
 
-A heterogeneous-agent New Keynesian model can reproduce the aggregate response of consumption to a monetary shock while misrepresenting how income risk is distributed across households, because errors of opposite sign in different regions of the wealth distribution offset in the aggregate. The diagnostic studied in the thesis asks which deformation of the household income process, at minimum informational cost, reconciles the model with a set of observed moments, and where in the wealth distribution that cost is spent.
+**Question.** Heterogeneous-agent New Keynesian (HANK) models are commonly evaluated on their ability to reproduce the response of aggregate consumption to a monetary policy shock. As Werning (2015) and Acharya and Dogra (2020) show, the conclusions of these models depend on how the uninsured income risk of households moves with aggregate conditions. The thesis asks whether the responses observed after a monetary policy shock can reveal that a model describes this risk incorrectly, and for which households.
 
-## Role of this repository
+**Purpose.** The aim is a measure of how far a given model is from the data in this respect, expressed as the smallest change in the income process of households that reconciles the model with the observed responses, together with the part of the wealth distribution in which the change is needed. Such a measure tells the user of a model how much to trust its distributional conclusions, which are the ones that distinguish it from a representative-agent model.
 
-The code runs a controlled experiment on a one-asset Aiyagari economy at quarterly frequency. A known misspecification of the income process is injected in a known region of the wealth distribution, the resulting consumption response is computed on the nonlinear perfect-foresight path, and the diagnostic is asked to attribute the gap. Because the truth is known by construction and the experiments carry no sampling noise, every attribution error reflects the geometry of the problem.
+**Method.** The alternatives to a solved reference model are the models that coincide with it except for the transition probabilities of household income in the quarters after the shock, which may differ across wealth groups. Among the alternatives that reproduce the observed responses, the method selects the one closest to the reference, with closeness measured by relative entropy, and reports its distance and the wealth groups in which the probabilities differ.
 
-The deformation scales the probability of switching income state for households whose end-of-period wealth falls in a given region. Its cost is the second-order relative entropy of the deformed income process with respect to the baseline, which weights each region by the expected number of income transitions originating there. An aggregate channel, a misspecified path of the real rate, competes with the regional deformations.
+**State of the work.** On data simulated from the model, the response of aggregate consumption is not enough for the method, because it does not distinguish a change in income risk from the monetary impulse. Adding the consumption of the poorer half of households separates the two and identifies up to two wealth groups. Adding the income expectations of households by group, which the ECB Consumer Expectations Survey collects, identifies up to four wealth groups and tells a change in risk from a change in expected income. With expectations, the consumption of the poorer half, for which the euro area has no public source, is no longer needed. The application to euro-area data is the next step.
 
-## Economic interpretation of main findings
+## 1. Reference model
 
-The aggregate consumption response makes the two tails of the wealth distribution visible and the middle almost invisible. In the bottom quartile, where virtually no household holds the high income state, more frequent income transitions work as an improvement in income prospects for households that consume 80 percent of a transfer within the quarter. In the top quartile, where 86 percent of households hold the high state, the same deformation works as a worsening of prospects for the households that own 57 percent of wealth. In the second quartile the two states are almost equally represented, the effects on expected income offset, and the deformation leaves almost no trace on aggregate consumption.
+Time is discrete and a period is a quarter. The economy is populated by a continuum of households of measure one, a government and a monetary authority, and has no aggregate uncertainty. It rests in its steady state until quarter 0, when an unanticipated monetary policy shock occurs, and from then on households know the path of every aggregate variable.
 
-On aggregate moments alone, a uniform increase in income churn is almost the mirror image of a rate cut (cosine of about -0.86), so that a single-region diagnostic attributes the churn injection to the monetary channel with a large margin. Adding twelve quarters of consumption of the bottom half of the wealth distribution removes the confounding, because on that group the two mechanisms move in the same direction while on the aggregate they move in opposite directions. The granularity at which misspecification can be localized is therefore a joint property of the chosen regions and of the observed moments.
+### Households
 
-Attribution by raw cost shares or by pairwise contrasts is biased towards the blocks with the largest aggregate footprint, the monetary channel and the wealthiest region. Attribution by the fraction of each region's capacity that is actually used recovers every injected region, including a deformation whose detection error probability is 0.465.
+A household enters quarter $`t`$ with $`b_t`$ units of a one-period real bond and with an earnings state $`e_t`$. The earnings state takes one of $`n`$ values and follows a Markov chain with transition probabilities $`p(e' \mid e)`$, independent across households. Markets are incomplete, since the bond is the only asset and borrowing is not allowed. The household chooses consumption $`c_t`$ and bond holdings $`b_{t+1}`$ to solve
 
-The results above are those of the September laboratory, in which the real rate is exogenous and the deformation is symmetric. The extensions below remove both limits.
+```math
+\begin{aligned}
+&\max \;\; \mathbb{E}_0 \sum_{t=0}^{\infty} \beta^{t}\, \frac{c_t^{\,1-\gamma}}{1-\gamma} \\[4pt]
+&\text{subject to} \quad c_t + b_{t+1} = (1+r_t)\, b_t + \frac{e_t}{\bar e_t}\,(Y_t - T_t), \qquad b_{t+1} \ge 0 .
+\end{aligned}
+```
 
-## Extensions
+Here $`\beta`$ is the discount factor, $`\gamma`$ the coefficient of relative risk aversion, $`r_t`$ the real interest rate on bonds held from quarter $`t-1`$ to quarter $`t`$, $`Y_t`$ aggregate output, $`T_t`$ aggregate taxes and $`\bar e_t`$ the average earnings state across households. Labour is supplied inelastically, and each household receives the share $`e_t / \bar e_t`$ of aggregate after-tax income, so that the earnings state governs how income is divided among households while total income is determined in equilibrium. The optimal decisions $`c_t(b,e)`$ and $`b_{t+1}(b,e)`$ satisfy the Euler equation
 
-**General-equilibrium closure (`closure.py`, `run_ge.py`).** Bonds are in fixed supply equal to steady-state wealth and the real rate clears the asset market along the transition, solved by Broyden on the sequence-space Jacobian of the household block. With fixed supply a return wedge is absorbed by the market rate, so the aggregate channel becomes a wedge on the discount factor and the aggregate moment is the equilibrium rate path. The confounding of September survives the endogenous rate: the rate paths generated by a uniform churn deformation and by the discount-factor wedge have cosine 0.83, the bottom-half consumption responses have cosine -0.76, and the full moment vectors have cosine -0.60. Attribution with distributional moments recovers all four quartiles, as in partial equilibrium.
+```math
+c_t(b,e)^{-\gamma} \;\ge\; \beta\,(1+r_{t+1}) \sum_{e'} p(e' \mid e)\; c_{t+1}\bigl(b_{t+1}(b,e),\, e'\bigr)^{-\gamma},
+```
 
-**HANK closure (`closure.py`, `run_ge.py --closure hank`).** The same household block is closed with demand-determined output, a linear Phillips curve in the output gap (slope 0.05), a Taylor rule on inflation (coefficient 1.5) and real bonds in fixed supply, with lump-sum taxes paying the interest so that the steady state is unchanged. Household income is the individual productivity state times aggregate after-tax income, so employment is demand-determined and the household block is untouched. The aggregate channel is a monetary shock, an announced 25 basis point cut of the nominal rate decaying at 0.8 per quarter, and the aggregate moment is the consumption response, which is the object that estimated responses to identified monetary shocks measure. The transition is solved by Broyden on output and inflation jointly, with the linear sequence-space operator as initial Jacobian; the goods market clears to 1e-11 and the nonlinear output path differs from the linear one by 0.14 percent. The cut raises consumption by 0.42 percent on impact, inflation by 9.5 basis points and lowers the real rate by 18 basis points.
+with equality whenever $`b_{t+1}(b,e) > 0`$.
 
-Two findings differ from the Aiyagari closure. First, on aggregate consumption the monetary cut is again the mirror image of a uniform churn deformation (cosine -0.74), but the bottom-half consumption moments now separate the two almost orthogonally (cosine -0.07), because a demand-driven expansion raises the income of the constrained households while more frequent income transitions make them save. Second, regional deformations lose resolution: with distributional moments the attribution is exact at one and two regions but fails at four, where the two middle quartiles are confused, whereas in the Aiyagari closure it was exact at four. The reason is the policy response, not the income channel. Decomposing each quartile's signature into its direct part, the part transmitted by the real rate and the part transmitted by aggregate income, the smallest singular value of the four normalized signatures is 0.17 for the direct part, 0.15 once the income feedback is added, and 0.07 once the rate feedback is added. A regional deformation moves inflation through the Phillips curve and the Taylor rule moves the real rate, and the induced rate paths have nearly the same shape for every region (pairwise cosines of 0.95 to 0.99 in absolute value), so that the policy response adds to every regional signature a large multiple of the same monetary response and roughly triples its size. Monetary policy thus converts part of any distributional misspecification into an aggregate signature, and localization survives only in the component orthogonal to that response. This loss is distinct from the coarseness of the moments and holds for every slope of the Phillips curve and every Taylor coefficient tried. A determinacy monitor reports the Taylor coefficient and the smallest singular value of the equilibrium operator (0.34 at the baseline calibration).
+Let $`\lambda_t(b,e)`$ denote the share of households that enter quarter $`t`$ with bonds $`b`$ and earnings state $`e`$. Aggregate consumption and average earnings are
 
-**Two-channel deformation (`channels.py`, `run_channels.py`).** The symmetric deformation is split by income state of origin into a channel that moves expected income at given persistence and a channel that moves persistence at given expected income, so that a correction of propagation can be told from a correction of risk. For an income chain with more than two states the split is defined by direction rather than by state of origin: the persistence channel scales every transition by the same factor and leaves the stationary distribution unchanged, the drift channel scales upward transitions by one plus the tilt and downward transitions by one minus the tilt and leaves the second eigenvalue of the chain unchanged. With two states the two definitions coincide. `run_channels.py --closure hank` runs the attribution battery under the HANK closure with monetary, persistence and drift blocks for every region, on raw moments and on moments conditioned on the real-rate path, with the monetary shock or the discount-factor wedge as aggregate channel, and writes `results_channels_hank.json`. In the laboratory the conditioned attribution is exact at one region on block, region and channel, exact on the region at two regions, and fails at four, where the dominant error is a persistence deformation read as a drift deformation of the same region: the persistence channel leaves expected income unchanged and acts only through precautionary saving, so its signature on consumption is small (impact response -0.20 percent against 0.80 for the drift channel at equal entropic cost) and is absorbed by drift. Locating a deformation is easier than naming it, and separating the two channels within a region asks for moments on income expectations rather than on consumption.
+```math
+C_t = \sum_{b,e} \lambda_t(b,e)\, c_t(b,e), \qquad \bar e_t = \sum_{b,e} \lambda_t(b,e)\, e ,
+```
 
-**Exact entropic dual (`exact.py`, `run_exact.py`).** The minimum-entropy correction on the income chain is computed without the quadratic approximation, by rescaling the transition probabilities at the moment dates until the moments are matched, first at frozen household policies.
+and $`\bar e_t = 1`$ at all dates in the reference model.
 
-**Outer loop with re-optimisation (`run_exact_reopt.py`).** Households re-optimise against the corrected income process and the dual is solved again until the fixed point, which is the full nonlinear version of the diagnostic on the laboratory.
+### Prices, government and monetary authority
 
-**Resolution certificate (`entropic.py`, `run_ge.py`).** The moment precision in the entropic projection can be a matrix, with the uniform scalar precision as the special case used by every result above. On that basis `run_ge.py` computes, for both closures and for the HANK closure also on rate-conditioned moments, a certificate of resolution in the sense of the October notes on certified resolution: the action is the resolution of the nested partition, the loss is the part of the finest correction that the coarse resolution does not represent or places elsewhere, measured in the metric of the prior precision, and the certified error at resolution K is a centre that depends on the data plus a width that depends only on the Jacobians and on the moment covariance. The width is the object that answers the post-selection problem of Leeb and Pötscher: the resolution is chosen from the design before the data, and the only dependence on the data runs through the covariance of the moments. At the precision implied by the diagnostic's own penalty no resolution is certifiable in the laboratory, which makes explicit that the exact attributions above are noise-free statements. The script therefore also reports the required precision: the per-horizon standard error of the moments, in percent of consumption, at which the width alone falls below one quarter of a reference correction, for independent and for strongly autocorrelated moment noise and for distributional noise equal to or twice the aggregate one. In the laboratory HANK closure the requirement at four regions is between 0.01 and 0.02 percent, and in the liquid calibration between 0.02 and 0.05; local projections of consumption on identified monetary shocks give standard errors an order of magnitude larger, so localization at four regions cannot be certified from consumption responses alone, which points the data step to moments on income expectations. The covariance structure is declared before the data and the most conservative case of the grid is the one to be reported.
+Output is produced with labour and is determined by demand. Prices are sticky, and inflation $`\pi_t`$, the growth rate of the price level between quarters $`t-1`$ and $`t`$, follows a New Keynesian Phillips curve
 
-**Expectation moments (`model.py`, `run_channels.py --closure hank --expectations`).** The path solver can add to the moment vector, for each wealth quartile, the deviation of expected income one year ahead and of its uncertainty, computed from the perceived income chain at the household's current wealth region and averaged over the group's current distribution; these are the objects that the ECB Consumer Expectations Survey reports by group. With them the two-channel battery under the HANK closure, on rate-conditioned moments, becomes exact on block, region and channel at one, two and four regions in the laboratory, with margins of 0.95, 0.91 and 0.23, against the failures recorded above without them. The same option computes the naming design: for every region, the generalized-least-squares distance between the persistence signature and the span of the drift signatures with consumption standard errors of 0.2 percent, and the standard error on the expectation moments, in percent of expected income, at which that distance reaches 80 percent power at the 5 percent level. In the laboratory the requirement at four regions lies between 0.4 and 2.3 percent; group means of expected income growth in the survey have standard errors around a tenth of a percent, so the survey is more precise than the design needs by one order of magnitude. Two further options fix the configuration to be used on data. `--groups income` defines the expectation groups by income state, as the survey does, which also removes a composition effect that makes the expectations of a group made of the constrained mass point strongly nonlinear; `--sigma s_c,s_e,phi` replaces the calibrated uniform precision by a declared moment covariance, with standard error `s_c` on the consumption moments, `s_e` on the expectation moments and autocorrelation `phi` across horizons, so that the attribution runs in the data metric. Under the liquid calibration, with income terciles and the conservative covariance (0.2, 0.3, 0.9), the rate-conditioned battery is exact on block, region and channel at one, two and four wealth regions with both aggregate channels, with margins between 0.17 and 0.84; the linearization error of the expectation moments is below 5 percent. Localizing needs consumption at a precision that local projections do not deliver; naming needs expectations at a precision that the survey delivers; with both, a realistic income process is localized and named at four wealth regions in the data metric.
+```math
+\pi_t = \kappa \,\log\frac{Y_t}{\bar Y} + \beta\, \pi_{t+1},
+```
 
-**Calibrations (`model.py`).** The economy is selected at import by the environment variable `HANK_CALIBRATION`. `lab` (default) is the two-state laboratory above. `liquid` and `total` use a seven-state Rouwenhorst discretization of an AR(1) in log income with quarterly persistence 0.966 and stationary standard deviation 0.5, and solve the discount factor so that steady-state wealth equals 1.04 quarters of income (liquid wealth, 29 percent of households at the constraint) or 5.6 quarters (total wealth, 13 percent). Under both closures `run_ge.py` writes results with the calibration as suffix, for instance `HANK_CALIBRATION=liquid python3 run_ge.py --closure hank` writes `results_hank_liquid.json`. Regions are still wealth groups of equal mass, with the constrained mass point kept whole when it exceeds the width of a group.
+where $`\bar Y`$ is steady-state output. Because labour supply is inelastic, the curve is imposed in reduced form, with its slope $`\kappa`$ as a parameter.
 
-The realistic calibrations change the picture of the laboratory. With seven income states a uniform churn deformation is essentially a change of persistence shared by every household, and on aggregate consumption it is the exact mirror image of the monetary cut under both wealth targets (cosine -0.999 and -0.995). The bottom-half consumption response still differs in its time profile (cosine 0.35 under liquid wealth, -0.33 under total wealth), and with that single distributional moment the attribution is exact at one region under both wealth targets and fails at four under both. The contrast with the two-state laboratory, where the bottom half of the distribution is almost entirely in the low income state and the deformation changes its expected income, shows that the resolving power of bottom-half consumption found in September depends on the composition effect of a two-state chain. Which distributional moments restore separation across regions under a realistic income process, and how much of it the policy response removes, are the next questions.
+The government keeps the stock of bonds constant at $`B`$ and pays the interest with taxes, $`T_t = r_t B`$. Taxes are levied in proportion to earnings and are not distortionary.
 
-## Limits
+The monetary authority sets the nominal interest rate $`i_t`$ on bonds held from quarter $`t`$ to quarter $`t+1`$ according to the rule
 
-The moments carry no sampling noise. The next steps are a realistic calibration of the income process and of liquid wealth, aggregate moments estimated from euro-area data with their covariance in place of the uniform precision, and distributional moments by wealth group.
+```math
+i_t = \bar r + \phi\, \pi_t + v_t, \qquad r_{t+1} = i_t - \pi_{t+1},
+```
 
-## Reproducing the results
+where $`\bar r`$ is the steady-state real rate, $`\phi`$ the response to inflation and $`v_t`$ the monetary policy shock, and the second equation is the Fisher relation. The return $`r_0`$ equals $`\bar r`$, because the bonds held when the shock occurs were issued before it.
+
+### Equilibrium
+
+Given a path of the shock $`v_t`$, an equilibrium consists of paths of $`r_t`$, $`i_t`$, $`\pi_t`$, $`Y_t`$ and $`T_t`$, of decision rules $`c_t(b,e)`$ and $`b_{t+1}(b,e)`$ and of distributions $`\lambda_t`$ such that households optimise, the distribution evolves according to the decision rules and the transition probabilities, the Phillips curve, the policy rule, the Fisher relation and the government budget hold, and the goods market clears,
+
+```math
+C_t = Y_t .
+```
+
+The bond market then clears by Walras' law,
+
+```math
+\sum_{b,e} \lambda_t(b,e)\, b_{t+1}(b,e) = B .
+```
+
+The steady state is the equilibrium with $`v_t = 0`$ at all dates, in which aggregate after-tax income is normalised to one.
+
+### Parameter values
+
+Three parameterisations share $`\gamma = 2`$, $`\bar r = 0.01`$ per quarter, $`\kappa = 0.05`$ and $`\phi = 1.5`$.
+
+| | Two-state example | Seven states, low wealth | Seven states, high wealth |
+|---|---|---|---|
+| Name in the code | `lab` | `liquid` | `total` |
+| Earnings state | 0.70 or 1.30, with probability 0.075 of changing state in a quarter | logarithm follows an AR(1) with autocorrelation 0.966 and standard deviation 0.5, on seven states | as in the previous column |
+| Discount factor $`\beta`$ | 0.970 | 0.954 | 0.975 |
+| Bond supply $`B`$, in quarters of average income | 1.51 | 1.04 | 5.60 |
+| Households at the borrowing limit | 19 percent | 29 percent | 13 percent |
+
+The two-state example is deliberately simple and serves to understand the mechanisms, with a quarterly marginal propensity to consume out of a transfer of 0.80 in the poorest quartile of the wealth distribution and of 0.05 in the richest. In the other two parameterisations the AR(1) process has the parameters of McKay, Nakamura and Steinsson (2016) and is discretised on seven states with the method of Rouwenhorst (1995), the high-wealth bond supply follows their calibration, and the low-wealth bond supply equals the liquid assets of households in Kaplan, Moll and Violante (2018), 0.26 of annual output. In both, the discount factor is chosen to match the bond supply. With low wealth, 29 percent of households are at the borrowing limit, close to the 30 percent of households without liquid wealth that Kaplan, Moll and Violante report for the United States.
+
+### Monetary policy shock
+
+The shock used throughout is a cut of the nominal rate of 25 basis points per quarter, one percentage point at an annual rate, that decays at rate 0.8 per quarter, $`v_t = -0.0025 \times 0.8^{t}`$. In the two-state example consumption rises by 0.44 percent on impact, inflation by 11 basis points, and the real rate between quarters 0 and 1 falls by 18 basis points.
+
+## 2. Alternative models
+
+An alternative model has the same preferences, policy rule, bond supply and steady state as the reference model, and differs from it only in the transition probabilities of the earnings state. For 40 quarters from quarter 0 these may deviate from $`p`$, by an amount that depends on the wealth of the household and on the date, after which they return to $`p`$. In the reference model a monetary policy shock leaves the income process unchanged, and the alternatives are therefore models in which the income process moves after the shock, possibly in different ways along the wealth distribution.
+
+Households are divided into $`J`$ groups of equal size according to their bond holdings, with $`J`$ equal to 1, 2, 4 or 8. With $`J = 4`$ the groups are the quartiles of the steady-state wealth distribution, except that the households at the borrowing limit are kept in the same group. For a household that leaves quarter $`t`$ with bond holdings in group $`j`$, the probability of moving from $`e`$ to a different state $`e'`$ is
+
+```math
+\tilde p_t(e' \mid e, j) \;=\; p(e' \mid e)\,\bigl(1+\Delta^{\mathrm{risk}}_{j,t}\bigr)\times
+\begin{cases}
+1+\Delta^{\mathrm{mean}}_{j,t} & \text{if } e' > e,\\[2pt]
+1-\Delta^{\mathrm{mean}}_{j,t} & \text{if } e' < e,
+\end{cases}
+```
+
+and the probability of remaining in $`e`$ is such that the probabilities sum to one.
+
+- A change in income risk, $`\Delta^{\mathrm{risk}}_{j,t} > 0`$, makes every change of earnings state more likely, upwards and downwards alike, so that earnings become less persistent and next quarter's earnings more uncertain.
+- A change in expected income growth, $`\Delta^{\mathrm{mean}}_{j,t} > 0`$, makes upward moves more likely and downward moves less likely.
+
+A change in risk common to all groups leaves the distribution of earnings unchanged for the economy as a whole. Within a wealth group it also moves expected income, because earnings return faster towards their average, and expected income therefore rises in the poorest group, where low earnings prevail. The two types of change remain distinct, since a change in risk moves the expected earnings of households with low earnings and of those with high earnings in opposite directions, whereas a change in expected income growth moves them in the same direction.
+
+Households know the path of these probabilities from quarter 0 and decide optimally given them, taking the probabilities of their own group as given. The Euler equation holds with $`\tilde p_t`$ in place of $`p`$, and the equilibrium conditions of Section 1 are unchanged. An alternative model is thus a perfect-foresight equilibrium of the same economy with a different income process. Because household income is the share $`e_t / \bar e_t`$ of aggregate income, a change of the income process redistributes income across households and leaves the determination of aggregate income to the equilibrium conditions.
+
+Errors of specification of another kind, for instance in the borrowing limit, lie outside this class and are to be studied by changing the reference model.
+
+## 3. Distance between an alternative and the reference
+
+The distance of an alternative from the reference is the relative entropy (Kullback-Leibler divergence) of its income process with respect to the reference one, per household, cumulated over the quarters after the shock,
+
+```math
+\mathcal{D}(\tilde p \,\|\, p) \;=\; \sum_{t \ge 0}\; \sum_{j,\,e} \tilde\lambda_t(j,e) \sum_{e'} \tilde p_t(e' \mid e, j)\, \log\frac{\tilde p_t(e' \mid e, j)}{p(e' \mid e)} ,
+```
+
+where $`\tilde\lambda_t(j,e)`$ is the share of households that leave quarter $`t`$ in wealth group $`j`$ with earnings state $`e`$. Relative entropy is the expected logarithm of the likelihood ratio between the two models, and it measures how easily they can be told apart by observing the income histories of households. Hansen and Sargent (2008) translate it into a detection error probability, the probability of choosing the wrong model on the basis of the data. With $`N`$ independent household histories this probability is approximately $`\Phi\bigl(-\sqrt{N \mathcal{D}/2}\bigr)`$, where $`\Phi`$ is the standard normal distribution function. It equals one half when the two models are indistinguishable and falls towards zero as the distance grows.
+
+For small deviations the distance is approximately quadratic,
+
+```math
+\mathcal{D}(\tilde p \,\|\, p) \;\approx\; \frac{1}{2} \sum_{t \ge 0} \sum_{j} \omega_j \Bigl[\bigl(\Delta^{\mathrm{risk}}_{j,t}\bigr)^2 + \bigl(\Delta^{\mathrm{mean}}_{j,t}\bigr)^2\Bigr],
+```
+
+where the weight $`\omega_j`$ is the number of changes of earnings state that originate in group $`j`$ in a quarter of the steady state, per household in the economy. A given percentage deviation is therefore farther from the reference in a group in which many changes of earnings state take place.
+
+## 4. Method
+
+The data are a vector $`\hat x`$ of responses to a monetary policy shock, estimated with error. The covariance matrix of the estimates, with one row and one column for each response, is written $`\mathrm{Var}(\hat x)`$. In the code the vector contains, in percentage deviation from the steady state,
+
+- the response of aggregate consumption over 24 quarters,
+- where the experiment includes it, the response of the consumption of the poorer half of households, those with bond holdings below the steady-state median, over 12 quarters,
+- where the experiment includes them, the responses over 12 quarters of expected income one year ahead and of its standard deviation, averaged within groups of households.
+
+Let $`x(\Delta, v)`$ denote the same vector computed in the equilibrium of the model with deviations $`\Delta`$ of the income process and path $`v`$ of the monetary policy shock, and let $`\hat v`$ be the path of the shock assumed by the researcher. The method solves
+
+```math
+\begin{aligned}
+\min_{\Delta,\, v} \;\; & N\, \mathcal{D}\bigl(\tilde p(\Delta) \,\|\, p\bigr)
+\;+\; \frac{1}{2} \sum_{t \ge 0} \Bigl(\frac{v_t - \hat v_t}{\sigma_v}\Bigr)^{2} \\[4pt]
+& +\; \frac{1}{2}\, \bigl(\hat x - x(\Delta, v)\bigr)'\, \mathrm{Var}(\hat x)^{-1}\, \bigl(\hat x - x(\Delta, v)\bigr).
+\end{aligned}
+```
+
+The first term is the distance of the alternative from the reference, multiplied by the number $`N`$ of independent household histories from which the two models are to be told apart. A larger $`N`$ makes deviations of the income process more costly relative to the fit of the responses. It is set to 8,000 in the experiments, and in an application it is a parameter to be fixed in advance (Section 7). The second term allows the monetary impulse to differ from the assumed one, at a cost governed by $`\sigma_v`$, set to 25 basis points. It represents an aggregate explanation of a gap between model and data, which competes with the distributional explanations. The third term penalises the part of the observed responses that the alternative does not reproduce, according to the precision of the estimates.
+
+The method reports the minimised distance, with its detection error probability, and the division of the minimised objective among the monetary term, the wealth groups and the two types of change, which indicates where the model needs to be corrected. Since the closest alternative is selected, the distance is a lower bound, in the sense that no alternative closer to the reference reproduces the data while the true model may be farther. The statement holds when the responses are measured without error, and only approximately when they are estimated, because the selected alternative then also reproduces part of the estimation error. The source indicated by the method is the component with the largest share, after dividing each share by the largest value it can take for any data, a normalisation that prevents the components with a large effect on consumption from being selected by construction.
+
+For the computation, the map $`x(\Delta, v)`$ is linearised around the reference equilibrium. Its matrix of derivatives with respect to changes announced for each future quarter is computed numerically, following the sequence-space approach of Auclert, Bardóczy, Rognlie and Straub (2021), and the distance is replaced by its quadratic approximation, so that the problem is quadratic and has a closed-form solution.
+
+## 5. Experiments
+
+Before turning to data, the method is tested on responses generated by the model itself, for which the correct answer is known. In each experiment a single disturbance is active, one of the following.
+
+- the monetary policy shock of Section 1, or
+- a change in income risk in one wealth group, $`\Delta^{\mathrm{risk}}_{j,t} = 0.15 \times 0.85^{t}`$, or
+- a change in expected income growth in one wealth group, $`\Delta^{\mathrm{mean}}_{j,t} = 0.15 \times 0.85^{t}`$.
+
+The equilibrium responses are computed without approximation and without estimation error and are handed to the method, which is asked to indicate the disturbance that generated them. An experiment is successful when the method indicates the correct source, wealth group and type of change, and its margin is the difference between the two largest normalised shares. The exercise is repeated for different sets of observed responses and for different numbers of wealth groups, in order to learn which observations are needed and how fine a division of the wealth distribution they support.
+
+The table of Section 6 refers to the monetary policy shock and to a common variance of the responses, chosen so that the selected alternative reproduces on average 95 percent of them. As checks, the experiments with two types of change are repeated with a declared covariance matrix, which has standard errors of 0.2 percent for the consumption responses and 0.3 percent for the expectations and autocorrelation 0.9 across horizons, with a shock to the discount factor of households, $`\beta_t = \beta\,(1 + 0.005 \times 0.8^{t})`$, in place of the monetary policy shock, and with the responses net of the effect of the path of the real rate.
+
+## 6. Results
+
+In the table, a tick means that every experiment is successful, "group" means that the wealth group is always correct while the two types of change are confused, and a cross means that at least one experiment is assigned to the wrong source or group. The three entries of each cell refer to 1, 2 and 4 wealth groups. An asterisk marks a tick that is not robust, because in at least one check of Section 5 an experiment fails or the smallest margin is below 0.10.
+
+| Observed responses | Two-state example | Seven states, low wealth | Seven states, high wealth |
+|---|---|---|---|
+| **Changes in income risk only** | | | |
+| Aggregate consumption | ✗ ✗ ✗ | ✗ ✗ ✗ | ✗ ✗ ✗ |
+| Aggregate consumption and consumption of the poorer half | ✓ ✓ ✗ | ✓ ✓ ✗ | ✓ ✓ ✗ |
+| **Changes in income risk and in expected income** | | | |
+| Aggregate consumption and consumption of the poorer half | ✓\* group ✗ | ✗ ✗ ✗ | ✓\* ✗ ✗ |
+| The same, with expected income and its standard deviation by group | ✓ ✓ ✓\* | ✓ ✓ ✓ | ✓ ✓ ✓\* |
+| Aggregate consumption, with expected income and its standard deviation by group | ✓ ✓ ✓\* | ✓ ✓ ✓ | ✓ ✓ ✓\* |
+
+**Aggregate consumption.** A rise in income risk common to all households lowers aggregate consumption, through precautionary saving, along a path that is almost proportional, with opposite sign, to the effect of the interest-rate cut. The uncentred correlation between the two responses is -0.72 in the two-state example and below -0.99 in the two seven-state parameterisations. With aggregate consumption alone, every change in income risk is attributed to monetary policy, in whichever wealth group it occurs.
+
+**Consumption of the poorer half.** The interest-rate cut raises the consumption of the poorer half mainly in the first year, whereas a rise in income risk moves it along a different path, which in the low-wealth parameterisation is a decline that is still deepening after two years. The uncentred correlation between the two responses of this group is 0.15, 0.02 and -0.42 in the three parameterisations. With these data the method identifies the source and distinguishes up to two wealth groups.
+
+**Risk and expected income.** When both types of change are allowed, consumption data do not tell them apart. In the two-state example the type of change is recovered only when the population is treated as a single group, and with two groups the wealth group is correct while the two types are confused. The seven-state parameterisations fail with one group under low wealth and beyond one group under high wealth. The two successes with one group are not robust, since in the two-state example an experiment fails in one check with the declared covariance matrix, and under high wealth the margin is 0.08 and experiments fail with the declared covariance matrix and with the shock to the discount factor.
+
+**Income expectations.** When the data include expected income one year ahead and its standard deviation by group of households, source, wealth group and type of change are recovered with 1, 2 and 4 wealth groups in the three parameterisations and in all the checks. The expectations are grouped by wealth quartile in the two-state example and by quintile of earnings in the seven-state parameterisations, as the ECB Consumer Expectations Survey classifies households by income quintile. Since a quintile does not coincide with a set of earnings states, the households of a state that spans two quintiles are divided between them in proportion. With 4 groups and the declared covariance matrix the smallest margin is 0.08 in the two-state example and under high wealth and 0.29 under low wealth.
+
+**Without the consumption of the poorer half.** Removing the consumption of the poorer half from these data does not change the outcome, and source, group and type of change are still recovered with 1, 2 and 4 wealth groups in the three parameterisations and in all the checks. The smallest margin is 0.46 with 1 and 2 groups, and with 4 groups and the declared covariance matrix it is 0.06 in the two-state example, 0.18 under low wealth and 0.03 under high wealth. The consumption of the poorer half therefore adds little to data that include expectations.
+
+**Required precision.** The number of wealth groups must be fixed before looking at the data, since choosing it after seeing where the assignment succeeds would invalidate inference, as Leeb and Pötscher (2005) show. The code therefore computes from the model alone how precise the estimates must be. For a description with four wealth groups to be reliable, the consumption responses would need standard errors between 0.004 and 0.05 percent, an order of magnitude below those of typical estimates. Telling a change in risk from a change in expected income within a group, with 80 percent power at the 5 percent level, requires standard errors of the expectation data, in percent of expected income, between 0.4 and 2.3 in the two-state example and between 1.5 and 5.8 in the seven-state parameterisations. Without the consumption of the poorer half, the requirement under low wealth is between 2.0 and 2.5 with four groups and between 3.7 and 6.3 with two. For the average expectation of a group in a given month, this precision is within reach of a survey of several thousand households. The response of that average to a monetary policy shock is estimated on a sample that starts in 2020, and whether its standard error meets the requirement is an open question (Section 7).
+
+## 7. Next step
+
+The method is to be applied to the euro area with three sets of estimates.
+
+- monetary policy shocks from the Euro Area Monetary Policy Event-Study Database of Altavilla, Brugnolini, Gürkaynak, Motto and Ragusa (2019),
+- the response of aggregate consumption to these shocks, estimated by local projections on quarterly national accounts together with its covariance matrix,
+- the responses of expected income and of its standard deviation by income quintile, from the ECB Consumer Expectations Survey. Every month since April 2020 the survey asks households how they expect their net income to change over the next 12 months, as a point forecast and as a probability distribution, and classifies them by income quintile.
+
+The consumption of the poorer half of households is not among these observations, which are those of the last row of the table of Section 6, because no public source measures consumption by wealth in the euro area at quarterly frequency. The public files of the survey report the change in household spending by income quintile, and their only monthly information on wealth is an indicator of sufficient liquidity.
+
+The first application distinguishes one or two wealth groups, for which the margins of Section 6 are wide and the linear approximation is accurate. The number of groups and the number $`N`$ of household histories are fixed before the estimates are examined. The number of groups is chosen by comparing the standard errors of the estimates with the precision requirements of Section 6. Since the survey starts in 2020, the responses of expectations rest on a short sample, and their standard errors are the main unknown of the application. The value of $`N`$ is the size of the sample of households on which the income process of the reference model can be tested, and the results are reported for a range of values, because with a given covariance matrix of the responses they depend on it (Section 8).
+
+The reference model is the low-wealth seven-state parameterisation, which matches the liquid wealth of households and the share of households without liquid wealth. It is also the parameterisation in which the linear approximation is least accurate. The error is concentrated in the consumption of the poorer half, which the first application does not use, and in the changes of expected income of the poorer groups when four groups are distinguished (Section 8). With one or two groups, the responses used in the application are approximated with errors of at most 4 percent for expectations and 12 percent for aggregate consumption. As a check, the application will be repeated with the high-wealth parameterisation as reference, in which the errors are below 6 percent.
+
+A description with four wealth groups, a second reference model with a looser borrowing limit and an income process estimated on EU-SILC data are left for a later stage.
+
+## 8. Limits
+
+- The experiments carry no estimation error, and the precision requirements of Section 6 are the only link to the sampling properties of actual estimates. The requirement on the consumption responses is computed for changes in income risk only and without expectation data. Its extension to the data of the first application is the first task of the next stage.
+- With a given covariance matrix of the responses, the outcome depends on $`N`$. With the data of the last row of the table and the declared covariance matrix, the experiments with 1 and 2 wealth groups are successful in the two seven-state parameterisations for values of $`N`$ from 500 to 80,000, with a smallest margin that falls from 0.46 at 8,000 to 0.03 at 80,000. Those with 4 groups fail at 80,000 under low wealth and from 20,000 under high wealth. With the common variance, which is chosen again for each $`N`$, the outcome does not change.
+- Uniqueness of the equilibrium is not proved. The code checks that the policy rule satisfies the Taylor principle and that the linearised system of equilibrium conditions is invertible at the reference, with smallest singular value 0.36, 0.34 and 0.69 in the three parameterisations.
+- For each experiment of Section 5 the code reports the distance between the exact response and its linear approximation, relative to the size of the exact response, separately for aggregate consumption, the consumption of the poorer half, expected income and its standard deviation. With the monetary policy shock as aggregate disturbance, the error is below 6 percent in the high-wealth parameterisation and at most 21 percent in the two-state example, apart from one small response with 59 percent. In the low-wealth parameterisation it is concentrated in the consumption of the poorer half, with errors of 11 percent for the monetary policy shock, up to 37 percent for changes in income risk and up to 95 percent for changes in expected income. On expectations and on aggregate consumption, with 1 and 2 wealth groups the errors are at most 4 and 12 percent, the figures of Section 7. With 4 groups they are of the same size for changes in income risk, whereas a change in expected income in either of the two poorer groups is approximated poorly, with errors between 30 and 137 percent. The experiments are computed without approximation, so the table of Section 6 already reflects these errors.
+- The model classifies households by current earnings, whereas the survey classifies them by the net income of the household in the previous year.
+- The Phillips curve is not derived from a problem of price setters, and labour supply is inelastic.
+- Households treat the transition probabilities of their wealth group as given and do not take into account that their saving may move them to another group.
+- In the household problem of the two-state example the exact distance, computed with households re-optimising, differs from its quadratic approximation by about 6 percent at most for deviations of the probabilities up to 15 percent and by 18 percent at most for deviations up to 60 percent. The approximation also omits a factor between 1.08 and 1.11, almost uniform across earnings states, with respect to the exact second-order term in discrete time, and neglects the interaction between the two types of change.
+
+## 9. Code
+
+### Reproducing the results
 
 ```
 pip install -r requirements.txt
-make          # runs run_all.py, run_micro.py, economics.py, figures.py, run_ge.py, run_ge.py --closure hank
-make docs     # compiles the notes in docs/ (requires a LaTeX installation)
+make
+python3 run_channels.py --closure hank
+python3 run_channels.py --closure hank --expectations
+HANK_CALIBRATION=liquid python3 run_channels.py --closure hank --expectations --groups income --sigma 0.2,0.3,0.9
+HANK_CALIBRATION=liquid python3 run_channels.py --closure hank --expectations --groups income --sigma 0.2,0.3,0.9 --aggregate
+HANK_CALIBRATION=liquid python3 run_channels.py --closure hank --expectations --groups income --sigma 0.2,0.3,0.9 --aggregate --households 80000
 ```
 
-The full pipeline runs in a few minutes on an ordinary machine. `run_channels.py`, `run_exact.py` and `run_exact_reopt.py` are run separately.
+`make` runs the household block in isolation, the version with bond-market clearing and the HANK model in the two-state example, and takes a few minutes. The parameterisation is selected by the environment variable `HANK_CALIBRATION`, for instance `HANK_CALIBRATION=liquid python3 run_ge.py --closure hank`. The first two rows of the table of Section 6 are produced by `run_ge.py --closure hank`, the last three by `run_channels.py --closure hank`, with the options shown above for the expectations, with `--aggregate` to leave out the consumption of the poorer half and with `--households` to set $`N`$. The same script prints the error of the linear approximation for each block of responses.
 
-| File | Role |
+### Names used in the code
+
+| In this file | In the code |
 |---|---|
-| `model.py` | baseline economy, steady state, wealth regions and transition weights, income deformation, perfect-foresight transition path with anticipated paths of the rate, the discount factor and aggregate income, Jacobian by direct anticipated perturbations |
-| `entropic.py` | prior precision, penalized minimum-cost correction, exact cost decomposition, capacity, detection error probability, Imhof quadrature for the null distribution |
-| `closure.py` | asset-market closure with the rate as unknown, HANK closure with output and inflation as unknowns, sequence-space equilibrium operators, Broyden transitions, determinacy monitor |
-| `channels.py` | two-channel deformation by income state of origin |
-| `exact.py` | exact entropic dual on the income chain, with and without household re-optimisation |
-| `run_all.py` | controlled injections and attribution on the nested family of regions with aggregate moments only, numerical validations, sensitivity to the effective panel size |
-| `run_micro.py` | the same analysis with bottom-half consumption moments added |
-| `run_ge.py` | the same analysis under the asset-market closure, or under the HANK closure with `--closure hank` |
-| `run_channels.py` | the two-channel deformation in partial and general equilibrium |
-| `run_exact.py`, `run_exact_reopt.py` | the exact dual at frozen policies and with re-optimisation |
-| `economics.py` | economic descriptors by wealth quartile, consumption responses, rate and churn confounding |
-| `figures.py` | figures of the June numerical appendix |
-| `plotstyle.py` | common figure style, deterministic PDF output |
+| wealth group | region, `K` regions |
+| change in income risk, $`\Delta^{\mathrm{risk}}`$ | `delta`, persistence, blocks `P1`, `P2`, ... |
+| change in expected income growth, $`\Delta^{\mathrm{mean}}`$ | `drift`, blocks `D1`, `D2`, ... |
+| monetary policy shock, discount factor shock | `eps`, `beta`, block `agg` |
+| observed responses | moments |
+| data without the consumption of the poorer half | `--aggregate` |
+| expectations by quintile of earnings | `--groups income` |
+| number $`N`$ of household histories | `NE`, `--households` |
+| error of the linear approximation | `approximation` |
+| experiment | injection |
+| source indicated by the method | attribution |
+| responses net of the effect of the real-rate path | `conditioned` |
+| precision requirement | certificate, `required_se` |
 
-`docs/nota_codice.pdf` describes the economic content of the results and the structure of the code (in Italian). `docs/appendice_numerica_toy.pdf` is the numerical appendix of June 2026, which documents the protocol in full.
+### Files
+
+| File | Content |
+|---|---|
+| `model.py` | household problem, steady state, wealth groups, alternative transition probabilities, perfect-foresight paths, expected income by group |
+| `closure.py` | equilibrium with bond-market clearing, HANK equilibrium, linearised equilibrium systems |
+| `entropic.py` | quadratic problem of Section 4, division of the minimised objective, detection error probability, precision requirement |
+| `channels.py` | the two types of change and their experiments |
+| `exact.py` | exact distance, at given decisions of households and with re-optimisation |
+| `run_all.py`, `run_micro.py` | experiments on the household block in isolation, with aggregate consumption and with the consumption of the poorer half |
+| `run_ge.py` | experiments with one type of change, with bond-market clearing or in the HANK model (`--closure hank`) |
+| `run_channels.py` | experiments with two types of change |
+| `run_exact.py`, `run_exact_reopt.py` | comparison between exact and approximate distance |
+| `economics.py`, `figures.py`, `plotstyle.py` | descriptive statistics and figures of the two-state example |
+
+### Earlier versions kept in the code
+
+Two simpler versions of the economy preceded the HANK model and remain available. One solves the household problem at a given path of the real rate, without market clearing, and the other lets the real rate clear the bond market with exogenous income. In both, household income is the earnings state itself, so that a change of the income process also changes aggregate income. With aggregate consumption and the consumption of the poorer half, the version without market clearing recovers the source with 1, 2 and 4 wealth groups, and the version with bond-market clearing with 1 and 4 groups. `docs/nota_codice.pdf` describes the former in Italian.
+
+## References
+
+Acharya, S., and Dogra, K. (2020). Understanding HANK: Insights from a PRANK. *Econometrica*, 88(3), 1113-1158.
+
+Altavilla, C., Brugnolini, L., Gürkaynak, R. S., Motto, R., and Ragusa, G. (2019). Measuring euro area monetary policy. *Journal of Monetary Economics*, 108, 162-179.
+
+Auclert, A., Bardóczy, B., Rognlie, M., and Straub, L. (2021). Using the sequence-space Jacobian to solve and estimate heterogeneous-agent models. *Econometrica*, 89(5), 2375-2408.
+
+Hansen, L. P., and Sargent, T. J. (2008). *Robustness*. Princeton University Press.
+
+Kaplan, G., Moll, B., and Violante, G. L. (2018). Monetary policy according to HANK. *American Economic Review*, 108(3), 697-743.
+
+Leeb, H., and Pötscher, B. M. (2005). Model selection and inference: Facts and fiction. *Econometric Theory*, 21(1), 21-59.
+
+McKay, A., Nakamura, E., and Steinsson, J. (2016). The power of forward guidance revisited. *American Economic Review*, 106(10), 3133-3158.
+
+Rouwenhorst, K. G. (1995). Asset pricing implications of equilibrium business cycle models. In T. F. Cooley (ed.), *Frontiers of Business Cycle Research*. Princeton University Press.
+
+Werning, I. (2015). Incomplete markets and aggregate demand. NBER Working Paper 21448.
 
 ## Contact
 
