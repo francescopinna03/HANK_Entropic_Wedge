@@ -227,6 +227,7 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
     mus = [None] * T
     A_path = np.empty(T)
     C_path = np.empty(T)
+    E_path = np.empty(T)
     kl = 0.0
     dC = np.empty(H)
     dCb = np.empty(Hb) if extra_mask is not None else None
@@ -241,6 +242,7 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
                               / Cb_ss - 1.0)
         A_path[t] = np.sum(mu * gs[t])
         C_path[t] = np.sum(mu * cs[t])
+        E_path[t] = np.sum(mu * Y[None, :])
         if t < T - 1 or return_kl:
             mu_next, mu_end = forward_step(mu, gs[t], Pis[t])
             if return_kl:
@@ -249,9 +251,9 @@ def solve_path(ss, dr_path, delta_paths, masks, extra_mask=None, Hb=12, dbeta_pa
                 mu = mu_next
     out = dC if extra_mask is None else np.concatenate([dC, dCb])
     if expect is not None:
-        out = np.concatenate([out, expectation_moments(ss, mus, Pis, expect)])
+        out = np.concatenate([out, expectation_moments(ss, mus, Pis, expect, x_path)])
     if return_consumption:
-        return out, A_path, C_path
+        return out, A_path, C_path, E_path
     if return_kl:
         return (out, A_path, kl) if return_assets else (out, kl)
     return (out, A_path) if return_assets else out
@@ -304,7 +306,7 @@ def income_forecast(Pis, t, h):
     return m1, np.sqrt(np.maximum(m2 - m1 ** 2, 0.0))
 
 
-def expectation_moments(ss, mus, Pis, expect):
+def expectation_moments(ss, mus, Pis, expect, x_path):
     groups, He, h = expect['groups'], expect['He'], expect['h']
     Pi_ss = tilted_Pi(np.zeros(NA))
     m1_ss, sd_ss = income_forecast([Pi_ss], 0, h)
@@ -316,8 +318,9 @@ def expectation_moments(ss, mus, Pis, expect):
         for t in range(He):
             m1, sd = income_forecast(Pis, t, h)
             w = mus[t][g] / np.sum(mus[t][g])
-            dE[t] = 100.0 * (np.sum(w * m1[g]) / E_ss - 1.0)
-            dS[t] = 100.0 * (np.sum(w * sd[g]) / S_ss - 1.0)
+            x = x_path[t + h] if t + h < len(x_path) else 1.0
+            dE[t] = 100.0 * (x * np.sum(w * m1[g]) / E_ss - 1.0)
+            dS[t] = 100.0 * (x * np.sum(w * sd[g]) / S_ss - 1.0)
         out.append(dE); out.append(dS)
     return np.concatenate(out)
 
